@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-slowmo-loop"
+version = "0.1.0"
+description = "Transform short AI-generated video clips into slow-motion, seamlessly looping background videos"
+readme = {text = "Transform short AI-generated video clips (5-10s from Runway, Kling, Pika, etc.) into longer, slow-motion, seamlessly looping background videos using GPU-accelerated frame interpolation.", content-type = "text/plain"}
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Ben", email = "benl@irontowerpress.com" },
+]
+keywords = ["video", "slow-motion", "loop", "ffmpeg", "frame-interpolation", "background-video", "runway", "ai-video"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Multimedia :: Video :: Conversion",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+video-slowmo-loop = "video_slowmo_loop:main"
+
+[project.urls]
+Homepage = "https://github.com/benl/video-slowmo-loop"
+Repository = "https://github.com/benl/video-slowmo-loop"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["video_slowmo_loop.py"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
