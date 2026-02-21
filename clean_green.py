@@ -21,7 +21,9 @@ def main():
     if len(sys.argv) >= 3:
         output_path = Path(sys.argv[2])
     else:
-        output_path = input_path.with_stem(f"{input_path.stem}_cleaned")
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+        output_path = output_dir / f"{input_path.stem}_cleaned{input_path.suffix}"
 
     img = Image.open(input_path).convert("RGBA")
     data = np.array(img)

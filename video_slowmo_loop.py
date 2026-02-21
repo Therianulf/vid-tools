@@ -304,8 +304,8 @@ Examples:
                         help="Skip frame interpolation, just duplicate frames (faster)")
     parser.add_argument("--method", choices=["flow", "blend"], default="flow",
                         help="Interpolation method: 'flow' (optical flow, better quality) or 'blend' (linear, faster)")
-    parser.add_argument("-o", "--output-dir", default=None,
-                        help="Output directory (default: same as input)")
+    parser.add_argument("-o", "--output-dir", default="output",
+                        help="Output directory (default: ./output)")
     parser.add_argument("--basename", default="background",
                         help="Output filename base (default: 'background')")
     parser.add_argument("--no-webm", action="store_true",
@@ -319,7 +319,7 @@ Examples:
         print(f"Error: Input file not found: {args.input}")
         sys.exit(1)
 
-    output_dir = args.output_dir or os.path.dirname(os.path.abspath(args.input))
+    output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
     device = get_device()

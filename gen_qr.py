@@ -43,19 +43,22 @@ def main():
     base = make_filename(url)
     qr = segno.make(url, error="H")
 
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+
     # web: scale 8 (~250px, fast loading, sharp on screens)
-    web_path = f"{base}_web.png"
-    qr.save(web_path, scale=8, border=2)
+    web_path = output_dir / f"{base}_web.png"
+    qr.save(str(web_path), scale=8, border=2)
     print(f"Web:   {web_path}")
 
     # print: scale 30 (~900px, crisp on flyers at 300dpi)
-    print_path = f"{base}_print.png"
-    qr.save(print_path, scale=30, border=4)
+    print_path = output_dir / f"{base}_print.png"
+    qr.save(str(print_path), scale=30, border=4)
     print(f"Print: {print_path}")
 
     # bonus: SVG for infinite scaling on print materials
-    svg_path = f"{base}.svg"
-    qr.save(svg_path, scale=1, border=4)
+    svg_path = output_dir / f"{base}.svg"
+    qr.save(str(svg_path), scale=1, border=4)
     print(f"SVG:   {svg_path}")
 
 

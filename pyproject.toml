@@ -3,10 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "video-slowmo-loop"
-version = "0.1.0"
-description = "Transform short AI-generated video clips into slow-motion, seamlessly looping background videos"
-readme = {text = "Transform short AI-generated video clips (5-10s from Runway, Kling, Pika, etc.) into longer, slow-motion, seamlessly looping background videos using GPU-accelerated frame interpolation.", content-type = "text/plain"}
+name = "vid-tools"
+version = "0.2.0"
+description = "Collection of video and image editing CLI tools"
+readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
@@ -39,13 +39,14 @@ dependencies = [
 
 [project.scripts]
 video-slowmo-loop = "video_slowmo_loop:main"
+video-looper = "video_looper:main"
 
 [project.urls]
-Homepage = "https://github.com/benl/video-slowmo-loop"
-Repository = "https://github.com/benl/video-slowmo-loop"
+Homepage = "https://github.com/blarson/vid-tools"
+Repository = "https://github.com/blarson/vid-tools"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["video_slowmo_loop.py"]
+only-include = ["video_slowmo_loop.py", "video_looper.py"]
 
 [tool.ruff]
 target-version = "py310"
