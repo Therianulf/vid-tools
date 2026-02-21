@@ -41,7 +41,7 @@ def main():
         url = f"https://{url}"
 
     base = make_filename(url)
-    qr = segno.make(url, error_correction="H")
+    qr = segno.make(url, error="H")
 
     # web: scale 8 (~250px, fast loading, sharp on screens)
     web_path = f"{base}_web.png"
