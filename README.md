@@ -6,20 +6,23 @@ A collection of CLI tools for video and image editing.
 
 ### video_looper.py — True Video Looper
 
-Creates seamlessly looping videos by finding a loop cut point and trimming. Outputs both a simple (PTS-stretched) and frame-interpolated version for comparison.
+Creates seamlessly looping videos using cross-fade blending — the tail of the video is blended directly into the head so there's no visible seam when it loops. Outputs both a simple (frame duplication) and interpolated (optical flow) version for comparison.
 
 ```bash
-# Scan for the best loop points (compares frames against frame 0)
+# Scan for frames most similar to frame 0 (potential hard-cut loop points)
 python video_looper.py input.mp4 --scan
 
-# Create a loop at a specific time
-python video_looper.py input.mp4 --loop-second 4.7
+# Scan for natural visual shift moments (transitions, lighting changes)
+python video_looper.py input.mp4 --scan-shift
 
-# Loop + slow down 2x
-python video_looper.py input.mp4 --loop-second 4.7 --slowdown 2.0
+# Create a loop at 5s with 2x slowdown and 1.5s cross-fade
+python video_looper.py input.mp4 --loop-second 5.0 --slowdown 2.0 --fade 1.5
 
 # Sub-second precision (frame offset within that second)
 python video_looper.py input.mp4 --loop-second 4.7 --loop-frame 2
+
+# Use the full video with default 1s cross-fade
+python video_looper.py input.mp4 --loop-second 5.0
 ```
 
 ### video_slowmo_loop.py — Slow-Motion Loop Creator
