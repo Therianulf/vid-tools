@@ -129,6 +129,49 @@ def scan_for_loop_points(video_path, fps, total_frames, start_second, count):
     return scores[:count]
 
 
+def scan_for_shifts(video_path, fps, total_frames, start_second, count):
+    """Scan video for frames where the biggest visual shift happens.
+
+    Compares each frame to its predecessor and ranks by largest difference —
+    finds natural transition moments that could mask a loop seam.
+    """
+    start_frame = max(1, int(start_second * fps))
+
+    if start_frame >= total_frames:
+        print(f"Warning: scan-start ({start_second}s) is beyond video end, scanning from 10%")
+        start_frame = max(1, total_frames // 10)
+
+    print(f"Scanning frames {start_frame}-{total_frames - 1} for visual shifts...")
+
+    cap = cv2.VideoCapture(video_path)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame - 1)
+    ret, prev_frame = cap.read()
+    if not ret:
+        cap.release()
+        return []
+
+    scores = []
+    for frame_num in range(start_frame, total_frames):
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Compute frame-to-frame difference (inverse similarity = shift magnitude)
+        diff = 1.0 - frame_similarity(prev_frame, frame)
+        scores.append((frame_num, frame_num / fps, diff))
+        prev_frame = frame
+
+        if (frame_num - start_frame) % 30 == 0:
+            pct = (frame_num - start_frame) / (total_frames - start_frame) * 100
+            print(f"  Progress: {pct:.0f}% (frame {frame_num})")
+
+    cap.release()
+
+    # Sort by shift magnitude descending
+    scores.sort(key=lambda x: x[2], reverse=True)
+    return scores[:count]
+
+
 def save_comparison(frame_first, frame_loop, output_path):
     """Save side-by-side comparison image of first and loop frames."""
     # Add labels
@@ -181,36 +224,37 @@ def interpolate_frames_optical_flow(frame1, frame2, num_intermediate=3):
     return intermediate
 
 
-def create_simple_version(input_path, loop_time, slowdown, output_path):
-    """Create looped video using FFmpeg PTS-based slowdown (fast)."""
-    print(f"\nCreating simple (PTS-stretched) version...")
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-t", str(loop_time),
-        "-filter:v", f"setpts={slowdown}*PTS",
-        "-an",
-        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
-        "-movflags", "+faststart",
-        str(output_path)
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"FFmpeg error: {result.stderr}")
-        sys.exit(1)
+def crossfade_loop(frames, fade_frames):
+    """Cross-fade the tail of the video into the head for a seamless loop.
 
-    size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"  -> {output_path} ({size_mb:.1f}MB)")
+    Overlaps the last `fade_frames` with the first `fade_frames` by alpha blending,
+    so the video smoothly morphs from end back into beginning with no seam.
+    The output is shorter by `fade_frames` since the tail overlaps the head.
+    """
+    total = len(frames)
+    if fade_frames >= total // 2:
+        fade_frames = total // 3
+        print(f"  Fade too long, clamping to {fade_frames} frames")
+
+    print(f"  Cross-fading {fade_frames} frames (tail into head)...")
+
+    # The blended region replaces the first fade_frames of the video
+    for i in range(fade_frames):
+        alpha = i / fade_frames  # 0.0 at start -> 1.0 at end of fade
+        tail_idx = total - fade_frames + i
+        head_frame = frames[i].astype(np.float32)
+        tail_frame = frames[tail_idx].astype(np.float32)
+        # Blend: start heavy on tail, transition to head
+        frames[i] = ((1 - alpha) * tail_frame + alpha * head_frame).astype(np.uint8)
+
+    # Trim off the tail (it's now blended into the head)
+    frames = frames[:total - fade_frames]
+    print(f"  Cross-fade complete: {total} -> {len(frames)} frames")
+    return frames
 
 
-def create_interpolated_version(input_path, loop_frame, fps, slowdown, output_path, device):
-    """Create looped video with optical flow frame interpolation."""
-    factor = max(1, int(round(slowdown)))
-    num_intermediate = factor - 1
-
-    print(f"\nCreating interpolated version ({factor}x, {num_intermediate} intermediate frames per pair)...")
-
-    # Load frames up to loop point
+def load_and_trim_frames(input_path, loop_frame):
+    """Load video frames from frame 0 up to loop_frame (inclusive)."""
     cap = cv2.VideoCapture(input_path)
     frames = []
     for i in range(loop_frame + 1):
@@ -219,49 +263,57 @@ def create_interpolated_version(input_path, loop_frame, fps, slowdown, output_pa
             break
         frames.append(frame)
     cap.release()
-
-    width = frames[0].shape[1]
-    height = frames[0].shape[0]
-
     print(f"  Loaded {len(frames)} frames")
+    return frames
 
-    if num_intermediate > 0:
-        # Interpolate
-        total_pairs = len(frames) - 1
-        output_frames = []
 
-        for i in range(total_pairs):
-            output_frames.append(frames[i])
+def slowdown_duplicate(frames, factor):
+    """Simple frame duplication slowdown. Each frame repeated `factor` times."""
+    output = []
+    for frame in frames:
+        for _ in range(factor):
+            output.append(frame)
+    print(f"  Duplicated {len(frames)} frames {factor}x -> {len(output)} frames")
+    return output
 
-            if i % 10 == 0:
-                pct = (i / total_pairs) * 100
-                print(f"  Interpolating: {pct:.0f}% ({i}/{total_pairs})")
 
-            intermediates = interpolate_frames_optical_flow(
-                frames[i], frames[i + 1],
-                num_intermediate=num_intermediate
-            )
-            output_frames.extend(intermediates)
+def slowdown_interpolate(frames, factor):
+    """Optical flow interpolated slowdown."""
+    num_intermediate = factor - 1
+    total_pairs = len(frames) - 1
+    output = []
 
-        output_frames.append(frames[-1])
-        print(f"  Interpolating: 100% -- {len(output_frames)} total frames")
-    else:
-        output_frames = frames
-        print(f"  Slowdown factor rounds to 1x, no interpolation needed")
+    for i in range(total_pairs):
+        output.append(frames[i])
+        if i % 10 == 0:
+            pct = (i / total_pairs) * 100
+            print(f"  Interpolating: {pct:.0f}% ({i}/{total_pairs})")
 
-    # Write to temp file then encode with ffmpeg
+        intermediates = interpolate_frames_optical_flow(
+            frames[i], frames[i + 1],
+            num_intermediate=num_intermediate
+        )
+        output.extend(intermediates)
+
+    output.append(frames[-1])
+    print(f"  Interpolating: 100% -- {len(output)} total frames")
+    return output
+
+
+def encode_h264(frames, fps, output_path):
+    """Write frames to H.264 MP4 via temp file + ffmpeg."""
+    height, width = frames[0].shape[:2]
+
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
         tmp_path = tmp.name
 
     try:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         writer = cv2.VideoWriter(tmp_path, fourcc, fps, (width, height))
-        for frame in output_frames:
+        for frame in frames:
             writer.write(frame)
         writer.release()
 
-        # Encode with H.264
-        print("  Encoding H.264...")
         cmd = [
             "ffmpeg", "-y",
             "-i", tmp_path,
@@ -280,6 +332,8 @@ def create_interpolated_version(input_path, loop_frame, fps, slowdown, output_pa
     print(f"  -> {output_path} ({size_mb:.1f}MB)")
 
 
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Create seamlessly looping videos by finding or specifying a loop cut point",
@@ -295,6 +349,8 @@ Examples:
     parser.add_argument("input", help="Input video file")
     parser.add_argument("--scan", action="store_true",
                         help="Scan mode: find and rank best loop-point frames vs frame 0")
+    parser.add_argument("--scan-shift", action="store_true",
+                        help="Scan mode: find frames with the biggest visual shift (natural transition points)")
     parser.add_argument("--scan-start", type=float, default=None,
                         help="Start scanning from this second (default: 50%% of duration)")
     parser.add_argument("--scan-count", type=int, default=5,
@@ -305,6 +361,8 @@ Examples:
                         help="Frame offset within the loop second for sub-second precision (default: 0)")
     parser.add_argument("--slowdown", type=float, default=1.0,
                         help="Slowdown factor, e.g. 2.0 = twice as slow (default: 1.0)")
+    parser.add_argument("--fade", type=float, default=1.0,
+                        help="Cross-fade duration in seconds for seamless loop transition (default: 1.0)")
     parser.add_argument("-o", "--output-dir", default="output",
                         help="Output directory (default: ./output)")
     parser.add_argument("--output-name", default=None,
@@ -316,8 +374,8 @@ Examples:
         print(f"Error: Input file not found: {args.input}")
         sys.exit(1)
 
-    if not args.scan and args.loop_second is None:
-        print("Error: Must specify either --scan or --loop-second")
+    if not args.scan and not args.scan_shift and args.loop_second is None:
+        print("Error: Must specify --scan, --scan-shift, or --loop-second")
         parser.print_help()
         sys.exit(1)
 
@@ -359,6 +417,35 @@ Examples:
         print(f"\nUse --loop-second <time> to create a loop at the chosen point.")
         return
 
+    # === SCAN-SHIFT MODE ===
+    if args.scan_shift:
+        scan_start = args.scan_start if args.scan_start is not None else duration * 0.1
+        print(f"\n{'='*60}")
+        print(f"Scanning for visual shifts (from {scan_start:.1f}s)")
+        print(f"{'='*60}")
+
+        candidates = scan_for_shifts(input_path, fps, total_frames, scan_start, args.scan_count)
+
+        print(f"\n{'='*60}")
+        print("Top visual shift candidates:")
+        print(f"{'='*60}")
+        print(f"{'Rank':<6}{'Frame':<10}{'Time':<12}{'Shift':<12}")
+        print("-" * 40)
+
+        for rank, (frame_num, time_sec, shift) in enumerate(candidates, 1):
+            print(f"{rank:<6}{frame_num:<10}{time_sec:.3f}s{'':<5}{shift:.4f}")
+
+            # Save before/after for top 3
+            if rank <= 3:
+                before = read_frame_at(input_path, max(0, frame_num - 1))
+                after = read_frame_at(input_path, frame_num)
+                comp_path = os.path.join(output_dir, f"{basename}_shift_{rank}.png")
+                save_comparison(before, after, comp_path)
+
+        print(f"\nThese frames have the biggest visual change from the previous frame.")
+        print(f"Use --loop-second <time> to create a loop at the chosen point.")
+        return
+
     # === LOOP MODE ===
     loop_frame_abs = int(args.loop_second * fps) + args.loop_frame
     loop_time = loop_frame_abs / fps
@@ -367,40 +454,61 @@ Examples:
         print(f"Error: Loop frame {loop_frame_abs} exceeds total frames {total_frames}")
         sys.exit(1)
 
+    slowdown_factor = max(1, int(round(args.slowdown)))
+
     print(f"\n{'='*60}")
     print(f"Creating loop: frame 0 -> frame {loop_frame_abs} ({loop_time:.3f}s)")
-    print(f"Slowdown: {args.slowdown}x")
+    print(f"Slowdown: {slowdown_factor}x | Cross-fade: {args.fade}s")
     print(f"{'='*60}")
 
-    # Save comparison image
-    frame_0 = read_frame_at(input_path, 0)
-    frame_loop = read_frame_at(input_path, loop_frame_abs)
-    similarity = frame_similarity(frame_0, frame_loop)
-    print(f"Frame similarity: {similarity:.4f}")
+    # Load and trim frames
+    print("\nStep 1: Loading frames...")
+    frames = load_and_trim_frames(input_path, loop_frame_abs)
 
-    comp_path = os.path.join(output_dir, f"{basename}_comparison.png")
-    save_comparison(frame_0, frame_loop, comp_path)
+    # -- Simple version (frame duplication + crossfade) --
+    print(f"\n{'='*60}")
+    print("Step 2a: Simple version (frame duplication)")
+    print(f"{'='*60}")
 
-    # Create simple (PTS-stretched) version
+    if slowdown_factor > 1:
+        simple_frames = slowdown_duplicate(frames, slowdown_factor)
+    else:
+        simple_frames = list(frames)
+
+    fade_frames = int(args.fade * fps * slowdown_factor)
+    simple_frames = crossfade_loop(simple_frames, fade_frames)
+
     simple_path = os.path.join(output_dir, f"{basename}_simple.mp4")
-    create_simple_version(input_path, loop_time, args.slowdown, simple_path)
+    print("  Encoding...")
+    encode_h264(simple_frames, fps, simple_path)
 
-    # Create interpolated version
+    # -- Interpolated version (optical flow + crossfade) --
+    print(f"\n{'='*60}")
+    print("Step 2b: Interpolated version (optical flow)")
+    print(f"{'='*60}")
+
+    if slowdown_factor > 1:
+        interp_frames = slowdown_interpolate(frames, slowdown_factor)
+    else:
+        interp_frames = list(frames)
+
+    interp_frames = crossfade_loop(interp_frames, fade_frames)
+
     interp_path = os.path.join(output_dir, f"{basename}_interp.mp4")
-    device = get_device()
-    create_interpolated_version(input_path, loop_frame_abs, fps, args.slowdown, interp_path, device)
+    print("  Encoding...")
+    encode_h264(interp_frames, fps, interp_path)
 
     # Summary
-    simple_dur = loop_time * args.slowdown
+    output_dur = len(simple_frames) / fps
     print(f"\n{'='*60}")
     print("Done!")
     print(f"{'='*60}")
-    print(f"Loop point:   frame {loop_frame_abs} ({loop_time:.3f}s)")
-    print(f"Slowdown:     {args.slowdown}x")
-    print(f"Output duration: ~{simple_dur:.1f}s")
-    print(f"Simple:       {simple_path}")
-    print(f"Interpolated: {interp_path}")
-    print(f"Comparison:   {comp_path}")
+    print(f"Loop point:      frame {loop_frame_abs} ({loop_time:.3f}s)")
+    print(f"Slowdown:        {slowdown_factor}x")
+    print(f"Cross-fade:      {args.fade}s")
+    print(f"Output duration: ~{output_dur:.1f}s")
+    print(f"Simple:          {simple_path}")
+    print(f"Interpolated:    {interp_path}")
 
 
 if __name__ == "__main__":
