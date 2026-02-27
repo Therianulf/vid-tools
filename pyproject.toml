@@ -40,13 +40,16 @@ dependencies = [
 [project.scripts]
 video-slowmo-loop = "video_slowmo_loop:main"
 video-looper = "video_looper:main"
+video-remove-bg = "video_remove_bg:main"
+bubble-cleanup = "bubble_cleanup:main"
+frames-to-video = "frames_to_video:main"
 
 [project.urls]
 Homepage = "https://github.com/blarson/vid-tools"
 Repository = "https://github.com/blarson/vid-tools"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["video_slowmo_loop.py", "video_looper.py"]
+only-include = ["video_slowmo_loop.py", "video_looper.py", "video_remove_bg.py", "bubble_cleanup.py", "frames_to_video.py"]
 
 [tool.ruff]
 target-version = "py310"
