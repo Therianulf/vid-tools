@@ -51,6 +51,10 @@ python remove_bg.py photo.jpg
 python remove_bg.py photo.jpg custom_output.png
 ```
 
+### AI Image Upscale + Background Removal
+
+For AI-generated images with fake checkerboard transparency baked into the pixels, a multi-step workflow is needed. Uses Real-ESRGAN for upscaling and rembg for background removal, with a green screen trick to get clean edges. See [upscale-and-remove-bg.md](upscale-and-remove-bg.md) for the full walkthrough.
+
 ### despill_green.py — Green Spill Removal
 
 Removes green spill/fringe from edges of transparent PNGs (compositing cleanup).
