@@ -84,8 +84,13 @@ Each beat has these keys:
 ## Audio
 
 The voice lines are placed on a silent track and mixed to -16 LUFS. The music bed is brought to
--24 LUFS and ducked about 6 dB under each voice line by a sidechain compressor fed from the voice. It
+-24 LUFS and ducked under each voice line by a sidechain compressor fed from the voice. It
 fades in over 0.3 s and out over the last 0.8 s. The mix goes through a limiter at -1.5 dBFS.
+
+How deep the duck goes depends on the bed. On 2026-10-21, `music-1-full.wav` at `--music-offset 2.5`
+measured: voice -15.8 LUFS while speaking, bed -32.1 LUFS under the voice and -23.5 LUFS in the gaps
+(a duck of about 8.6 dB, the voice 16.3 LU over the bed), and the whole mix -16.8 LUFS with a true peak
+of -1.5 dBFS.
 
 ## Output
 
