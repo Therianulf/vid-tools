@@ -65,7 +65,7 @@ Each beat has these keys:
 | `seconds` | Length of the beat. The cut is the sum of all beats. |
 | `start` | Clip only. Where in the take the beat begins. Default 0. |
 | `image` | Still only. File name under `--shots`. |
-| `push` | Still only. A slow zoom toward a point: `zoom` (default 0.15), `x` and `y` as fractions of the frame, `supersample` (default 1; see Pushing on a still). |
+| `push` | Still only. A slow zoom toward a point: `zoom` (default 0.15), `x` and `y` as fractions of the frame, `supersample` (a whole number from 1 to 8, default 1; see Pushing on a still). |
 | `fade_in` | Optional. Seconds of fade in from black. |
 | `line` | Optional. The on-screen line, drawn as a band near the bottom. |
 | `tagline` | End card only. Optional text under the wordmark. |
@@ -81,7 +81,7 @@ To keep something still (a mic, and a rings centre on it), set x to its x / widt
 ffmpeg's zoompan crops on whole input pixels, so on a 1920x1080 still a slow push steps unevenly.
 `"supersample": 4` upscales the image 4x (lanczos) before the push and smooths it.
 We measured the frame-to-frame motion's variation at 0.40 native, 0.21 at 2x and 0.16 at 4x on a 1920x1088 still with a 0.06 push.
-The 4x beat rendered in 1.3 s.
+The 4x render of a 3 s beat took 1.3 s.
 The store shots are already 3840x2160, so they need no supersample.
 
 A still beat's `image` may be an absolute path, so a beat 1 still can live outside the `--shots` folder.
