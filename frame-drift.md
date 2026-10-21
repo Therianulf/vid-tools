@@ -114,7 +114,9 @@ done
 
 Read: the exit code per still; `verdict`; `samples[0].whole.ssim_ref` and `samples[0].crops.*.ssim_ref` (the
 `ssim_prev` values are null for a still); `contact_sheet` shows the reference beside the still. Crops only mean
-something when the new still keeps the reference's layout.
+something when the new still keeps the reference's layout. Always pass the face crops for a still check: without
+crops, two different stills of the same layout can pass on the whole frame alone (our tester measured
+`beat1-redo-h-01` against `beat1-redo-i-03` at whole-frame SSIM 0.67, above the 0.6 threshold, so CLEAN).
 
 (b) A take against its source still, with face and mic crops:
 
