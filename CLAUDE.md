@@ -20,6 +20,8 @@ vid-tools is a collection of standalone Python CLI tools for video and image edi
 - `remove_bg.py` — AI background removal (rembg/U2-Net)
 - `despill_green.py` — Green spill removal from transparent PNGs
 - `clean_green.py` — Aggressive green artifact removal from transparent PNGs
+- `trailer_cut.py` — Assembles a short trailer from a JSON spec (beats, on-screen lines, voice-over, ducked music bed). See [trailer-cut.md](trailer-cut.md).
+- `trailer_cards.py` — Renders a trailer's lower-third text and end card PNGs with Pillow; used by trailer_cut.py.
 
 ## Conventions
 
@@ -43,6 +45,8 @@ Venv is Python 3.11. System dependency: `ffmpeg` (install via `brew install ffmp
 ## Dependencies
 
 Managed in `pyproject.toml`: torch, torchvision, opencv-python, numpy, rembg, Pillow, segno
+
+System: `rsvg-convert` (`brew install librsvg`) and `libfribidi` (`brew install fribidi`) for trailer_cut.py.
 
 ## Linting
 
