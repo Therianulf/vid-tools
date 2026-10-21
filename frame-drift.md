@@ -143,3 +143,8 @@ The same crops in native 1280x720 pixels, since there is no `--size`. Read: only
 
 Python 3 with opencv-python and numpy, plus torch because it imports `video_looper.py`. No ffmpeg to run; the tests
 use ffmpeg to make clips.
+
+Run `frame_drift.py` from a vid-tools checkout that has it (the frame-drift branch until it merges, then main), so
+it imports the `video_looper.py` beside it. The vid-tools venv carries an editable install that points at
+`~/Github/vid-tools`; a copy of the script run from anywhere else imports that checkout's `video_looper.py`, which
+may lack `iter_frames` (runwayTools hit this with a git-archive copy on 2026-10-21).
