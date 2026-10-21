@@ -70,6 +70,50 @@ Each beat has these keys:
 | `line` | Optional. The on-screen line, drawn as a band near the bottom. |
 | `tagline` | End card only. Optional text under the wordmark. |
 | `voice` | Optional. `file`, `at` (seconds into the beat) and `max` (longest allowed, default `seconds - 2 * at`). |
+| `rings` | Optional. The broadcast rings overlay (`trailer_rings.py`); see Rings. |
+
+## Rings
+
+A beat can carry a `rings` block: the website's broadcast rings (coop-comms-website `js/main.js`, `initRings`).
+Full circles grow from a centre, the Host half teal and the Guest half blue, born in phrases like speech.
+`trailer_rings.py` renders them as PNG frames; the cut lays them over the beat with an ffmpeg `blend`
+(screen by default) in RGB, under the on-screen line and before the beat's fade-in, so they glow over dark
+areas and only brighten faces. Preview one beat alone with `python trailer_rings.py --spec <spec> [--beat N] [-o dir]`.
+
+Every key except `center` has the default shown.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `center` | required | `[x, y]` in output pixels. Must be inside the frame. |
+| `host_side` | `left` | Which half gets the Host colour: `left` (pixels with x < centre x) or `right`. |
+| `colors` | `["#5bd6b0", "#93b4ff"]` | `[Host, Guest]` colours. |
+| `line_width` | `3` | Stroke width in output pixels, anti-aliased. |
+| `opacity` | `0.55` | Peak opacity of the line. |
+| `falloff` | `1.5` | Exponent of the fade: `(1 - r / max_radius) ** falloff`. |
+| `start_radius` | `48` | Radius a ring is born at, in pixels. |
+| `speed` | `108` | Growth in pixels per second. |
+| `max_radius` | `null` | A ring is dropped at this radius. `null` is the distance to the farthest frame corner. |
+| `target` | `null` | A point `[x, y]`, such as the farther PC. Sets `speed = distance / reach` and `max_radius = fade_ratio * distance`. Giving it together with `speed` or `max_radius` is an error. |
+| `reach` | `1.0` | Seconds a ring takes to reach `target`. |
+| `fade_ratio` | `1.2` | The ring is gone at this multiple of the distance to `target`. |
+| `phrase.rings` | `[2, 5]` | Rings per phrase, `[min, max]` inclusive. |
+| `phrase.gap` | `[0.18, 0.34]` | Seconds between rings inside a phrase. |
+| `phrase.pause` | `[0.9, 1.8]` | Seconds of pause after a phrase. |
+| `seed` | `1` | Random seed, so a render repeats exactly. |
+| `first` | `0.0` | Beat-local second of the first ring; negative starts with rings already in flight. |
+| `start`, `end` | `0.0`, `null` | Beat-local seconds the layer shows. `null` end is the beat's length. |
+| `fade` | `0.0` | Seconds of fade in after `start` and fade out before `end`. |
+| `glow` | `{"width": 20, "opacity": 0.3}` | A soft radial Gaussian halo around each ring, `width` its full width at half maximum in pixels. `null` or opacity 0 is none. |
+| `blend` | `screen` | The ffmpeg blend mode used to lay the rings over the beat. |
+
+The video tuning came from coop-comms-website via coop-comms-ad-ep1 on 2026-10-21: the centre sits on the
+mic capsule; the Host colour is on the Host side; a ring reaches the farther PC in about 1 s (`target` plus
+`reach`) and fades out at 1.2 times that distance; the line is about 3 px with peak opacity 0.5 to 0.6, screen
+blend, and a soft glow about 20 px wide at 0.3; phrases are 2 to 5 rings 180 to 340 ms apart with a 0.9 to
+1.8 s pause, the first phrase on the first spoken word (`first` 0.2); the rings are flat screen-space half
+circles, never a Wi-Fi wedge; there is no hero glow. The `start_radius` 48 and `speed` 108 defaults are the
+site's 40 and 90 scaled by 1.2 for a 900 px hero shown at 1080p. The line is 3 px because 1.5 CSS px shows as
+3 device px on a retina screen, and a thinner line does not survive Steam's re-encode and small player.
 
 ## The beats
 

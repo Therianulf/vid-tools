@@ -69,7 +69,7 @@ python clean_green.py keyed_image.png
 
 ### trailer_cut.py — Trailer Cut
 
-Assembles a short trailer from a JSON spec: clip and still beats, on-screen lines, voice-over, and a music bed ducked under the voice. Text and end cards are drawn as PNGs by `trailer_cards.py`. See [trailer-cut.md](trailer-cut.md).
+Assembles a short trailer from a JSON spec: clip and still beats, on-screen lines, voice-over, and a music bed ducked under the voice. Text and end cards are drawn as PNGs by `trailer_cards.py`. `trailer_rings.py` draws the optional broadcast rings overlay. See [trailer-cut.md](trailer-cut.md).
 
 ```bash
 python trailer_cut.py --spec trailer-specs/coop-comms-v1.json \

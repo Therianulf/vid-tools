@@ -41,6 +41,8 @@
   on-screen lines, voice-over, ducked music bed). [trailer-cut.md](trailer-cut.md).
 - `trailer_cards.py` — renders the trailer's lower-third and end card PNGs with Pillow; used by
   `trailer_cut.py`. [trailer-cut.md](trailer-cut.md).
+- `trailer_rings.py` — renders the broadcast rings overlay for a trailer beat;
+  see [trailer-cut.md](trailer-cut.md) (Rings).
 
 ## Context
 

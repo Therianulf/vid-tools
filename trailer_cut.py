@@ -27,6 +27,7 @@ import tempfile
 from pathlib import Path
 
 from trailer_cards import ensure_raqm, render_cards, resolve_line_font
+from trailer_rings import render_rings, ring_settings
 
 
 def fmt(x):
@@ -72,8 +73,9 @@ def fade_suffix(beat):
     return f",fade=t=in:st=0:d={fmt(beat['fade_in'])}" if "fade_in" in beat else ""
 
 
-def video_graph(spec, cards_texts):
-    """The video filter segments, ending in the [v] label."""
+def video_graph(spec, cards_texts, ring_inputs=None):
+    """The video filter segments, ending in the [v] label. ring_inputs maps beat number to its rings input."""
+    ring_inputs = ring_inputs or {}
     w, h = spec["size"]
     fps = spec["fps"]
     fade = spec["line_fade"]
@@ -100,7 +102,17 @@ def video_graph(spec, cards_texts):
             chain = f"[{i}:v]fps={fps},scale={w}:{h}:flags=lanczos,setsar=1"
         else:
             chain = f"[{i}:v]fps={fps},setsar=1"
-        segments.append(f"{chain}{fade_suffix(beat)}[b{n}]")
+        if n in ring_inputs:
+            k = ring_inputs[n]
+            blend = ring_settings(beat["rings"])["blend"]
+            segments.append(f"{chain}[c{n}]")
+            segments.append(f"[{k}:v]format=gbrp[r{n}]")
+            segments.append(f"[c{n}]format=gbrp[g{n}]")
+            segments.append(
+                f"[g{n}][r{n}]blend=all_mode={blend}:shortest=1,format=yuv420p{fade_suffix(beat)}[b{n}]"
+            )
+        else:
+            segments.append(f"{chain}{fade_suffix(beat)}[b{n}]")
         labels.append(f"[b{n}]")
     text_index = len(spec["beats"])
     for n, beat in enumerate(spec["beats"], start=1):
@@ -167,8 +179,8 @@ def audio_graph(spec, null_index, voice_files, music_index, music_offset):
     return segments, "[a]"
 
 
-def build_ffmpeg_args(spec, take, shots, cards_texts, cards_ends, voice_files, music, music_offset, out):
-    """The full ffmpeg argv for the cut."""
+def build_ffmpeg_args(spec, take, shots, cards_texts, cards_ends, voice_files, music, music_offset, out, rings=None):
+    """The full ffmpeg argv for the cut. rings maps beat number to the PNG pattern from render_rings."""
     fps = spec["fps"]
     enc = spec["encode"]
     total = total_seconds(spec)
@@ -195,9 +207,15 @@ def build_ffmpeg_args(spec, take, shots, cards_texts, cards_ends, voice_files, m
     if music is not None:
         music_index = null_index + 1 + len(voice_files)
         args += ["-i", str(music)]
+    ring_inputs = {}
+    next_index = music_index + 1 if music_index is not None else null_index + 1 + len(voice_files)
+    for n in sorted(rings or {}):
+        ring_inputs[n] = next_index
+        next_index += 1
+        args += ["-framerate", str(fps), "-start_number", "0", "-i", str(rings[n])]
 
     a_segments, a_map = audio_graph(spec, null_index, voice_files, music_index, music_offset)
-    graph = ";\n".join(video_graph(spec, cards_texts) + a_segments)
+    graph = ";\n".join(video_graph(spec, cards_texts, ring_inputs) + a_segments)
     args += ["-filter_complex", graph, "-map", "[v]", "-map", a_map, "-t", fmt(total), "-r", str(fps)]
     args += ["-c:v", "libx264", "-preset", enc["preset"], "-profile:v", enc["profile"], "-pix_fmt", "yuv420p"]
     args += ["-b:v", enc["video_bitrate"], "-maxrate", enc["maxrate"], "-bufsize", enc["bufsize"]]
@@ -307,6 +325,24 @@ def main():
     if not spec["thumbnail_at"] < total:
         fail(f"thumbnail_at {fmt(spec['thumbnail_at'])} must be before the end of the cut ({fmt(total)} s)")
 
+    # 7. Rings blocks.
+    for n, beat in enumerate(beats, start=1):
+        if "rings" not in beat:
+            continue
+        try:
+            settings = ring_settings(beat["rings"])
+        except ValueError as e:
+            fail(f"beat {n} rings: {e}")
+        cx, cy = settings["center"]
+        if not (0 <= cx < w and 0 <= cy < h):
+            fail(f"beat {n} rings: center {settings['center']} is outside the {w}x{h} frame")
+        end = settings["end"] if settings["end"] is not None else beat["seconds"]
+        if not 0 <= settings["start"] < end <= beat["seconds"]:
+            fail(
+                f"beat {n} rings: need 0 <= start < end <= {fmt(beat['seconds'])} "
+                f"(start {fmt(settings['start'])}, end {fmt(end)})"
+            )
+
     with tempfile.TemporaryDirectory() as work_name:
         work = Path(work_name)
         print("Rasterising the wordmark")
@@ -317,8 +353,13 @@ def main():
         )
         print("Rendering cards")
         texts, ends = render_cards(spec, line_font, tagline_font, wordmark_png, work)
+        rings = {}
+        for n, beat in enumerate(beats, start=1):
+            if "rings" in beat:
+                print(f"Rendering rings for beat {n}")
+                rings[n] = render_rings(beat["rings"], spec["size"], spec["fps"], beat["seconds"], work, f"rings-{n}")
         print(f"Cutting {out}")
-        cmd = build_ffmpeg_args(spec, args.take, args.shots, texts, ends, voice_files, args.music, offset, out)
+        cmd = build_ffmpeg_args(spec, args.take, args.shots, texts, ends, voice_files, args.music, offset, out, rings)
         try:
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError as e:
