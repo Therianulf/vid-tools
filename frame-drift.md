@@ -6,9 +6,16 @@ as faces and props. We built it to judge Runway Gen-4.5 takes whose faces drift.
 driving the CLI) runs it on every new still batch and take, and a cheap sweep model and a judge model read the
 result. The contract below is for any agent.
 
+What it is for (Ben): "the goal is to detect movement and change between frames, and then have grok view that
+suspected area and see if the changes are natural (hand moving over the keyboard) or not (hand disappearing, mouse
+appearing, warping)". The tool is the detect half: it finds changed regions by itself, inside or outside the named
+crops, and flags the crops that cross a threshold. The `review[]` list and the evidence images are what the judge
+reads.
+
 - stdout is exactly one JSON document, the same text that is written to `<out>/drift.json`.
 - stderr carries all progress and error text.
-- The exit code is the verdict: 0 clean, 2 a sample crossed a threshold, 1 usage or runtime error (stdout is empty on 1).
+- The exit code is the verdict: 0 clean, 2 something to review (a threshold crossed or a changed region found), 1 usage
+  or runtime error (stdout is empty on 1).
 
 This tool puts its result on stdout and its progress on stderr, unlike the other tools, by Ben's call.
 
@@ -24,7 +31,7 @@ sheet and the JSON.
 ```
 python frame_drift.py [-h] [--reference PATH] [--every N | --fps F] [--start S] [--end S]
                       [--size WxH] [--crop NAME=X,Y,W,H] [--threshold SSIM]
-                      [--prev-threshold SSIM] [--match-light] [-o DIR] INPUT
+                      [--prev-threshold SSIM] [--suspects N] [--match-light] [-o DIR] INPUT
 ```
 
 ## Options
@@ -41,6 +48,7 @@ python frame_drift.py [-h] [--reference PATH] [--every N | --fps F] [--start S] 
 | `--crop NAME=X,Y,W,H` | none | Named region in analysis pixels; repeatable. Names are letters, digits, `_` and `-`; `whole` is reserved. The crop must lie inside the frame. |
 | `--threshold SSIM` | 0.6 | Flag SSIM vs reference below this. |
 | `--prev-threshold SSIM` | 0.5 | Flag SSIM vs previous sample below this. |
+| `--suspects N` | 3 | Changed regions to find per sample; 0 turns the search off. |
 | `--match-light` | off | Also score light-matched SSIM (`ssim_ref_lm`, `ssim_prev_lm`) and flag on it instead of the plain SSIM. The plain scores stay reported. |
 | `-o, --out DIR` | `output/<input stem>-drift` | Output folder. Re-running replaces the earlier sample PNGs. |
 
@@ -59,6 +67,32 @@ A still ignores `--every`, `--fps`, `--start` and `--end`.
 
 SSIM measures structure, not identity. A talking mouth or a head turn lowers it like a face that becomes someone
 else, so the flags say where to look, and the contact sheet and sample PNGs are what to look at.
+
+## Changed regions and evidence
+
+- `suspects`: found automatically for each sample. Where the SSIM map against the previous sample (a still: against
+  the reference) falls below 0.5, the pixels are closed and opened to drop specks, joined into regions of at least
+  0.1% of the frame, padded 24 px, and overlapping boxes merged. Biggest first, up to `--suspects` per sample. The
+  first sample of a video has none; neither does a still without a reference. Each has `box` `[x, y, w, h]`, `area`,
+  `ssim_prev`, `ssim_ref` inside the box and `evidence`.
+- `evidence/`: one image per flagged region of a flagged sample (`sNNNN-<region>.png`, `whole` or the crop name) and
+  one per suspect (`sNNNN-suspectK.png`). Three panels, the box from the previous sample, the current sample and the
+  reference, enlarged to 360 px high, with the time and the scores burned in; a missing image shows `none`.
+- `review`: the judge's queue, every evidence image in sample order, flagged regions first then suspects:
+  `index`, `frame`, `time`, `region`, `box`, `reason` (`flag:<checks>` or `suspect`), `scores` and `evidence`.
+- Exit 2 now also means a changed region was found. The verdict is `FLAGGED: ...; N regions to review` when a
+  threshold crossed, `REVIEW: n samples above thresholds; N changed regions to review` when only suspects were found,
+  else `CLEAN`. A moving talker will produce suspects; the judge decides.
+- On the contact sheet, suspect boxes are amber and the boxes of flagged crops red.
+
+## Judge rubric
+
+Natural: a hand moving over the keyboard or mouse, typing, breathing, a small head turn, blinking, screen light or
+flicker. Unnatural: a hand or finger vanishing or doubling, an object appearing or disappearing (a mouse, a cable,
+lettering), warping or melting edges, a face changing shape or identity.
+
+A judge works the queue: open each `review[].evidence` image, compare current with previous (and with the reference),
+and answer natural or unnatural with one short reason. One unnatural answer fails the take.
 
 ## Why these defaults
 
@@ -79,6 +113,7 @@ approximate times (`frame / average fps`). A long take at `--every 1` grows the 
 - `contact-sheet.png`: six thumbnails a row, the reference first. Under each, three label lines: index, frame and
   time; whole-frame SSIM vs reference and previous; the worst crop (or the loop score). A flagged sample has a red
   border and a red first line ending `FLAG`.
+- `evidence/`: the judge images described above. Re-running replaces the earlier ones.
 - `drift.json`: the document that is also on stdout.
 
 ## The JSON
@@ -86,17 +121,18 @@ approximate times (`frame / average fps`). A long take at `--every 1` grows the 
 | Key | Contents |
 |---|---|
 | `tool`, `version` | `frame_drift` and the document version. |
-| `verdict` | One line: `CLEAN: ...` or `FLAGGED: ...` naming the first crossing and what else fired. |
+| `verdict` | One line: `CLEAN: ...`, `REVIEW: ...` (changed regions only) or `FLAGGED: ...` naming the first crossing and what else fired. |
 | `exit_code` | 0 or 2. |
 | `output_dir`, `drift_json`, `contact_sheet` | Absolute paths. |
 | `legend` | What each metric and field means. |
 | `input` | `path`, `kind` (video or still), `native_size`, `fps`, `total_frames`, `duration`, `crop_to_aspect`. |
 | `reference` | null, or `path`, `native_size`, `crop_to_aspect`. |
-| `settings` | `analysis_size`, `every`, `sample_fps`, `start`, `end`, `threshold`, `prev_threshold`, `match_light`, `ssim`. |
+| `settings` | `analysis_size`, `every`, `sample_fps`, `start`, `end`, `threshold`, `prev_threshold`, `match_light`, `suspects`, `ssim`. |
 | `crops` | `[{name, box}]` in CLI order. |
-| `summary` | `samples`, `flagged_samples`, `checks`, `metrics`, `worst`. |
-| `flagged` | Flagged samples only: `index`, `frame`, `time`, `file`, `flags`. |
-| `samples` | Every sample: `index`, `frame`, `time`, `file`, `flagged`, `flags`, `whole` and `crops` (each with `ssim_ref`, `ssim_prev`, `ssim_ref_lm`, `ssim_prev_lm`, `loop_score_ref`, `loop_score_prev`). |
+| `summary` | `samples`, `flagged_samples`, `checks`, `metrics`, `worst`, `review` (evidence images), `suspects` (changed regions). |
+| `flagged` | Flagged samples only: `index`, `frame`, `time`, `file`, `flags`, `evidence`. |
+| `review` | The judge's queue; see above. |
+| `samples` | Every sample: `index`, `frame`, `time`, `file`, `flagged`, `flags`, `whole` and `crops` (each with `ssim_ref`, `ssim_prev`, `ssim_ref_lm`, `ssim_prev_lm`, `loop_score_ref`, `loop_score_prev`), `suspects` and `evidence`. |
 | `samples[]` | A metric is null when it does not apply (no reference; the first sample has no previous one). |
 | `summary.checks` | Per `region:metric`: `threshold`, `failed`, `first_below` (`index`, `frame`, `time`, or null). |
 | `summary.metrics` | Per region and metric: `min`, `mean`, `min_index`. |
@@ -118,7 +154,7 @@ done
 ```
 
 Read: the exit code per still; `verdict`; `samples[0].whole.ssim_ref` and `samples[0].crops.*.ssim_ref` (the
-`ssim_prev` values are null for a still); `contact_sheet` shows the reference beside the still. Crops only mean
+`ssim_prev` values are null for a still); `review[]` and its evidence images show what changed from the reference; `contact_sheet` shows the reference beside the still. Crops only mean
 something when the new still keeps the reference's layout. Always pass the face crops for a still check: without
 crops, two different stills of the same layout can pass on the whole frame alone (our tester measured
 `beat1-redo-h-01` against `beat1-redo-i-03` at whole-frame SSIM 0.67, above the 0.6 threshold, so CLEAN).
@@ -133,7 +169,7 @@ python frame_drift.py "$T/beat1-take-04-gen45-5s.mp4" --reference "$T/beat1-redo
 
 Read: exit 2 or 0; `verdict` names the first crop and time; `flagged[]` lists each flagged sample's time, file and
 failed checks; `summary.checks["face_left:ssim_ref"].first_below`; `summary.metrics.face_left.ssim_ref.min`;
-`summary.worst`; then open `contact_sheet`. For takes whose light changes across the faces (game light, flicker), add
+`summary.worst`; then `review[]` and open each `evidence` image; `contact_sheet` gives the overview. For takes whose light changes across the faces (game light, flicker), add
 `--match-light`, and read both `ssim_*_lm` (flagged) and the plain `ssim_*` (reported): a face whose plain SSIM falls
 while its light-matched SSIM holds is light, not drift.
 
@@ -144,7 +180,7 @@ python frame_drift.py "$T/beat1-take-04-gen45-5s.mp4" --crop face_left=267,160,1
 ```
 
 The same crops in native 1280x720 pixels, since there is no `--size`. Read: only `*:ssim_prev` checks exist;
-`verdict`; `flagged[]`; `summary.metrics.*.ssim_prev.min`. A dip in one sample and recovery in the next is a jump.
+`verdict`; `flagged[]`; `review[]` and its evidence images (changed regions anywhere in the frame); `summary.metrics.*.ssim_prev.min`. A dip in one sample and recovery in the next is a jump.
 
 ## Requirements
 

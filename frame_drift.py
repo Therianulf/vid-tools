@@ -4,6 +4,7 @@ Frame Drift
 ===========
 Scores an AI video take, or one still, for drift: SSIM and the loop finder's similarity score against an
 approved reference still and against the previous sample, over the whole frame and named crops (faces, props).
+Also finds changed regions on its own and writes side-by-side evidence images of each suspected area.
 Built on video_looper.py --scan: the same frame reader and frame_similarity score. Agent-facing: stdout is one
 JSON document (also written to <out>/drift.json), progress goes to stderr, and the exit code is the verdict.
 
@@ -13,7 +14,8 @@ Usage:
     python frame_drift.py take.mp4 --crop face_left=400,240,240,260    # frame to frame only
     python frame_drift.py new-still.png --reference approved-still.png
 
-Exit codes: 0 clean, 2 a sample crossed a threshold, 1 usage or runtime error.
+Exit codes: 0 clean, 2 something to review (a threshold crossed or a changed region found), 1 usage or runtime
+error. Changed regions and flagged crops each get an evidence image for a judge; see review[] in the JSON.
 
 Requirements:
     opencv-python, numpy, torch (imported by video_looper.py)
@@ -32,7 +34,7 @@ import numpy as np
 
 from video_looper import frame_similarity, iter_frames, load_video_info
 
-TOOL_VERSION = "1.1"  # bump when the JSON document changes shape
+TOOL_VERSION = "1.2"  # bump when the JSON document changes shape
 DEFAULT_EVERY = 6  # every 6th frame: 4 samples a second at 24 fps, 21 samples on a 5 s take
 DEFAULT_THRESHOLD = 0.6  # SSIM vs reference; on take-04 static parts stayed above 0.78, drifting faces fell below 0.6
 DEFAULT_PREV_THRESHOLD = 0.5  # SSIM vs previous sample; half the structure gone in one step (0.25 s at the defaults)
@@ -50,9 +52,17 @@ SHEET_BORDER = 4  # width of the red border on a flagged thumbnail
 SHEET_BG = (32, 32, 32)  # BGR
 SHEET_TEXT = (235, 235, 235)  # BGR
 SHEET_FLAG = (0, 0, 255)  # BGR red: flagged border and first label line
+DEFAULT_SUSPECTS = 3  # changed regions kept per sample; 0 turns the search off
+SUSPECT_SSIM = 0.5  # a pixel is "changed" where the local SSIM map falls below this
+SUSPECT_MIN_AREA = 0.001  # smallest changed region, as a fraction of the analysis frame's area
+SUSPECT_PAD = 24  # pixels added around a changed region's box
+EVIDENCE_PANEL_H = 360  # height of each evidence panel in pixels
+EVIDENCE_HEADER_H = 46  # two header lines above the panels
+EVIDENCE_CAPTION_H = 24  # one caption line under each panel
+SUSPECT_COLOR = (0, 215, 255)  # BGR amber: suspect boxes on the contact sheet
 EXIT_CLEAN = 0
 EXIT_ERROR = 1  # usage or runtime error; stdout stays empty
-EXIT_FLAGGED = 2  # at least one sample crossed a threshold
+EXIT_FLAGGED = 2  # something to review: a sample crossed a threshold or a changed region was found
 CROP_RE = re.compile(r"^([A-Za-z0-9_-]+)=(\d+),(\d+),(\d+),(\d+)$")
 SIZE_RE = re.compile(r"^(\d+)[xX](\d+)$")
 SSIM_TEXT = (
@@ -90,6 +100,20 @@ LEGEND = {
         "[x, y, w, h] centred box kept before resizing to the analysis size so the aspect matches; "
         "null when the whole picture was used"
     ),
+    "suspects": (
+        "changed regions found automatically: where the SSIM map vs the previous sample (a still: vs the "
+        "reference) falls below 0.5, joined, at least 0.1% of the frame, padded 24 px; biggest first, up to "
+        "--suspects per sample; box [x, y, w, h] in analysis pixels"
+    ),
+    "evidence": (
+        "side-by-side images of a suspected area: the previous sample, the current sample and the reference, "
+        "cropped to the box and enlarged, with the time and the scores burned in; one per flagged region and "
+        "per suspect"
+    ),
+    "review": (
+        "the judge's queue: every evidence image in time order with its reason (flag:<checks> or suspect) and "
+        "scores; a judge looks at each image and answers natural or unnatural (see the rubric in frame-drift.md)"
+    ),
     "null": "a metric is null when it does not apply: no reference, or the first sample has no previous one",
 }
 EPILOG = """example:
@@ -97,7 +121,7 @@ EPILOG = """example:
     --crop face_left=400,240,240,260 --crop mic=900,620,130,160 -o out/take-drift
 stdout: one JSON document (verdict, flagged samples, paths, per-sample scores),
         also written to <out>/drift.json. Progress and errors go to stderr.
-exit: 0 clean, 2 a sample crossed a threshold, 1 usage or runtime error.
+exit: 0 clean, 2 something to review (threshold crossed or changed region), 1 error.
 """
 METRIC_NAMES = ("ssim_ref", "ssim_prev", "ssim_ref_lm", "ssim_prev_lm", "loop_score_ref", "loop_score_prev")
 
@@ -107,7 +131,7 @@ class DriftError(Exception):
 
 
 class AgentParser(argparse.ArgumentParser):
-    """argparse whose usage errors exit 1, so exit 2 always means flagged."""
+    """argparse whose usage errors exit 1, so exit 2 always means something to review."""
 
     def error(self, message):
         self.print_usage(sys.stderr)
@@ -344,10 +368,16 @@ def summarize(samples, crop_names, checks, threshold, prev_threshold, has_refere
 
 
 def verdict_line(summary):
-    """One line for the verdict: CLEAN, or FLAGGED with the first crossing and what else fired."""
+    """One line for the verdict: CLEAN, REVIEW (changed regions only), or FLAGGED with the first crossing."""
     n = summary["samples"]
     noun = "sample" if n == 1 else "samples"
     if not summary["flagged_samples"]:
+        if summary["suspects"]:
+            regions = summary["review"]
+            return (
+                f"REVIEW: {n} {noun} above thresholds; "
+                f"{regions} changed {'region' if regions == 1 else 'regions'} to review"
+            )
         return f"CLEAN: {n} {noun}, all above thresholds"
     fired = [c for c, info in summary["checks"].items() if info["failed"] > 0]
     first = min(fired, key=lambda c: summary["checks"][c]["first_below"]["index"])
@@ -363,7 +393,112 @@ def verdict_line(summary):
     others = [c for c in fired if c != first]
     if others:
         line += "; also " + ", ".join(others)
-    return line
+    regions = summary["review"]
+    return line + f"; {regions} {'region' if regions == 1 else 'regions'} to review"
+
+
+def suspect_regions(sim_map, max_regions, min_area, pad):
+    """Boxes [x, y, w, h] around the largest changed regions of an SSIM map, biggest first."""
+    if max_regions <= 0:
+        return []
+    mask = (sim_map < SUSPECT_SSIM).astype(np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    map_h, map_w = sim_map.shape[:2]
+    found = []
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area < min_area:
+            continue
+        x0 = max(0, int(stats[i, cv2.CC_STAT_LEFT]) - pad)
+        y0 = max(0, int(stats[i, cv2.CC_STAT_TOP]) - pad)
+        x1 = min(map_w, int(stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH]) + pad)
+        y1 = min(map_h, int(stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT]) + pad)
+        found.append({"box": [x0, y0, x1 - x0, y1 - y0], "area": area})
+
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(found)):
+            for j in range(i + 1, len(found)):
+                ax, ay, aw, ah = found[i]["box"]
+                bx, by, bw, bh = found[j]["box"]
+                if min(ax + aw, bx + bw) > max(ax, bx) and min(ay + ah, by + bh) > max(ay, by):
+                    x0, y0 = min(ax, bx), min(ay, by)
+                    x1, y1 = max(ax + aw, bx + bw), max(ay + ah, by + bh)
+                    found[i] = {"box": [x0, y0, x1 - x0, y1 - y0], "area": found[i]["area"] + found[j]["area"]}
+                    del found[j]
+                    merged = True
+                    break
+            if merged:
+                break
+
+    found.sort(key=lambda r: (-r["area"], r["box"][1], r["box"][0]))
+    return found[:max_regions]
+
+
+def evidence_image(prev_img, cur_img, ref_img, box, header_lines, flagged):
+    """One judge image: the box from the previous sample, the current sample and the reference, with a header."""
+    x, y, w, h = box
+    panel_w = round(w * EVIDENCE_PANEL_H / h)
+    gap = SHEET_GAP
+    width = gap + 3 * (panel_w + gap)
+    height = gap + EVIDENCE_HEADER_H + gap + EVIDENCE_PANEL_H + EVIDENCE_CAPTION_H + gap
+    image = np.full((height, width, 3), SHEET_BG, dtype=np.uint8)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    for j, line in enumerate(header_lines[:2]):
+        color = SHEET_FLAG if j == 0 and flagged else SHEET_TEXT
+        cv2.putText(image, line, (gap, gap + 16 + 20 * j), font, 0.55, color, 1, cv2.LINE_AA)
+    top = gap + EVIDENCE_HEADER_H + gap
+    for i, (source, caption) in enumerate(((prev_img, "previous"), (cur_img, "current"), (ref_img, "reference"))):
+        x0 = gap + i * (panel_w + gap)
+        if source is None:
+            (tw, th), _ = cv2.getTextSize("none", font, 0.55, 1)
+            cv2.putText(
+                image, "none", (x0 + (panel_w - tw) // 2, top + (EVIDENCE_PANEL_H + th) // 2),
+                font, 0.55, SHEET_TEXT, 1, cv2.LINE_AA,
+            )
+        else:
+            crop = source[y:y + h, x:x + w]
+            enlarging = EVIDENCE_PANEL_H > h
+            image[top:top + EVIDENCE_PANEL_H, x0:x0 + panel_w] = cv2.resize(
+                crop, (panel_w, EVIDENCE_PANEL_H), interpolation=cv2.INTER_CUBIC if enlarging else cv2.INTER_AREA
+            )
+        cv2.putText(
+            image, caption, (x0, top + EVIDENCE_PANEL_H + 17), font, 0.55, SHEET_TEXT, 1, cv2.LINE_AA
+        )
+    return image
+
+
+def box_scores(box, ref_map, prev_map, gray, ref_gray, prev_gray, light=False):
+    """SSIM vs previous and reference inside box (plus the light-matched pair with light), rounded to 4 places."""
+    x, y, w, h = box
+    sl = (slice(y, y + h), slice(x, x + w))
+
+    def mean(m):
+        return None if m is None else round(float(m[sl].mean()), 4)
+
+    def lm(other):
+        if other is None:
+            return None
+        return round(ssim(match_light(gray[sl], other[sl]), other[sl]), 4)
+
+    scores = {"ssim_prev": mean(prev_map), "ssim_ref": mean(ref_map)}
+    if light:
+        scores["ssim_prev_lm"] = lm(prev_gray)
+        scores["ssim_ref_lm"] = lm(ref_gray)
+    return scores
+
+
+def evidence_header(record, region, box, scores, light=False):
+    """The two header lines of an evidence image."""
+    x, y, w, h = box
+    line1 = f"#{record['index']} f{record['frame']} {record['time']:.2f}s  {region}  box {x},{y},{w},{h}"
+    line2 = f"ssim prev {fmt2(scores['ssim_prev'])} ref {fmt2(scores['ssim_ref'])}"
+    if light:
+        line2 += f"  lm prev {fmt2(scores['ssim_prev_lm'])} ref {fmt2(scores['ssim_ref_lm'])}"
+    return [line1, line2]
 
 
 def sheet_size(cells, frame_w, frame_h):
@@ -377,10 +512,12 @@ def sheet_size(cells, frame_w, frame_h):
 
 
 def contact_sheet(cells, frame_w, frame_h):
-    """Draw the contact sheet; cells is a list of (image, lines, flagged)."""
+    """Draw the contact sheet; cells is a list of (image, lines, flagged, suspect boxes, flagged crop boxes)."""
     cols, _, thumb_h, width, height = sheet_size(len(cells), frame_w, frame_h)
     sheet = np.full((height, width, 3), SHEET_BG, dtype=np.uint8)
-    for i, (image, lines, flagged) in enumerate(cells):
+    sx = SHEET_THUMB_W / frame_w
+    sy = thumb_h / frame_h
+    for i, (image, lines, flagged, suspect_boxes, flag_boxes) in enumerate(cells):
         x0 = SHEET_GAP + (i % cols) * (SHEET_THUMB_W + SHEET_GAP)
         y0 = SHEET_GAP + (i // cols) * (thumb_h + SHEET_LABEL_H + SHEET_GAP)
         sheet[y0:y0 + thumb_h, x0:x0 + SHEET_THUMB_W] = cv2.resize(
@@ -392,6 +529,14 @@ def contact_sheet(cells, frame_w, frame_h):
             sheet[y0 + thumb_h - b:y0 + thumb_h, x0:x0 + SHEET_THUMB_W] = SHEET_FLAG
             sheet[y0:y0 + thumb_h, x0:x0 + b] = SHEET_FLAG
             sheet[y0:y0 + thumb_h, x0 + SHEET_THUMB_W - b:x0 + SHEET_THUMB_W] = SHEET_FLAG
+        for boxes, color in ((suspect_boxes, SUSPECT_COLOR), (flag_boxes, SHEET_FLAG)):
+            for bx, by, bw, bh in boxes:
+                cv2.rectangle(
+                    sheet,
+                    (x0 + round(bx * sx), y0 + round(by * sy)),
+                    (x0 + round((bx + bw) * sx), y0 + round((by + bh) * sy)),
+                    color, 2,
+                )
         for j, line in enumerate(lines):
             color = SHEET_FLAG if j == 0 and flagged else SHEET_TEXT
             cv2.putText(
@@ -461,6 +606,10 @@ def build_parser():
         help="flag SSIM vs previous sample below this (default 0.5)",
     )
     parser.add_argument(
+        "--suspects", type=int, default=DEFAULT_SUSPECTS, metavar="N",
+        help="changed regions to find per sample (default 3; 0 off)",
+    )
+    parser.add_argument(
         "--match-light", action="store_true", help="also score light-matched SSIM and flag on it instead"
     )
     parser.add_argument(
@@ -521,6 +670,9 @@ def run(args):
     (out / "frames").mkdir(parents=True, exist_ok=True)
     for old in (out / "frames").glob("s*-f*.png"):
         old.unlink()
+    (out / "evidence").mkdir(exist_ok=True)
+    for old in (out / "evidence").glob("s*.png"):
+        old.unlink()
     out = out.resolve()
 
     kind = "still" if still else "video"
@@ -539,8 +691,11 @@ def run(args):
         wanted = set(planned)
         source = ((n, f) for n, f in iter_frames(str(path), planned[0], planned[-1] + 1) if n in wanted)
 
+    min_area = max(1, round(SUSPECT_MIN_AREA * aw * ah))
+    boxes_by_region = {"whole": (0, 0, aw, ah), **dict(args.crop)}
     samples = []
     cells = []
+    review = []
     prev = prev_gray = input_box = None
     for frame_num, frame in source:
         index = len(samples)
@@ -568,16 +723,69 @@ def run(args):
                 )
                 for name, box_ in args.crop
             },
+            "suspects": [],
+            "evidence": [],
         }
         record["flags"] = sample_flags(record, checks, args.threshold, args.prev_threshold)
         record["flagged"] = bool(record["flags"])
+
+        if prev_map is not None:
+            found = suspect_regions(prev_map, args.suspects, min_area, SUSPECT_PAD)
+        elif still and ref_map is not None:
+            found = suspect_regions(ref_map, args.suspects, min_area, SUSPECT_PAD)
+        else:
+            found = []
+        jobs = []  # (region, box, flagged, reason, suspect record or None)
+        for region in ["whole", *crop_names]:
+            failed = [f for f in record["flags"] if f.split(":")[0] == region]
+            if failed:
+                jobs.append((region, boxes_by_region[region], True, "flag:" + ",".join(failed), None))
+        for k, found_one in enumerate(found, start=1):
+            bx, by, bw, bh = found_one["box"]
+            sl = (slice(by, by + bh), slice(bx, bx + bw))
+            suspect = {
+                "box": found_one["box"],
+                "area": found_one["area"],
+                "ssim_prev": None if prev_map is None else round(float(prev_map[sl].mean()), 4),
+                "ssim_ref": None if ref_map is None else round(float(ref_map[sl].mean()), 4),
+                "evidence": None,
+            }
+            record["suspects"].append(suspect)
+            jobs.append((f"suspect{k}", found_one["box"], False, "suspect", suspect))
+        for region, box_, flagged, reason, suspect in jobs:
+            scores = box_scores(box_, ref_map, prev_map, gray, ref_gray, prev_gray, args.match_light)
+            evidence_file = out / "evidence" / f"s{index:04d}-{region}.png"
+            image = evidence_image(
+                prev, fit, ref_fit, box_, evidence_header(record, region, box_, scores, args.match_light), flagged
+            )
+            if not cv2.imwrite(str(evidence_file), image):
+                raise DriftError(f"cannot write {evidence_file}")
+            if suspect is not None:
+                suspect["evidence"] = str(evidence_file)
+            record["evidence"].append({"region": region, "box": list(box_), "file": str(evidence_file)})
+            review.append({
+                "index": index,
+                "frame": frame_num,
+                "time": time,
+                "region": region,
+                "box": list(box_),
+                "reason": reason,
+                "scores": scores,
+                "evidence": str(evidence_file),
+            })
         flag_text = "  FLAG " + ", ".join(record["flags"]) if record["flags"] else ""
         log(f"  #{index} f{frame_num} {time:.2f}s" + flag_text)
         if index == 0:
             input_box = box
         prev, prev_gray = fit, gray
         samples.append(record)
-        cells.append((fit, sample_label(record, has_reference, args.match_light), record["flagged"]))
+        flag_boxes = [
+            boxes_by_region[r] for r in crop_names if any(f.split(":")[0] == r for f in record["flags"])
+        ]
+        cells.append((
+            fit, sample_label(record, has_reference, args.match_light), record["flagged"],
+            [s["box"] for s in record["suspects"]], flag_boxes,
+        ))
 
     if not samples:
         raise DriftError(f"no frames could be read from {path}")
@@ -587,11 +795,14 @@ def run(args):
     summary = summarize(
         samples, crop_names, checks, args.threshold, args.prev_threshold, has_reference, args.match_light
     )
+    suspect_total = sum(len(s["suspects"]) for s in samples)
+    summary["review"] = len(review)
+    summary["suspects"] = suspect_total
     verdict = verdict_line(summary)
-    code = EXIT_FLAGGED if summary["flagged_samples"] else EXIT_CLEAN
+    code = EXIT_FLAGGED if summary["flagged_samples"] or suspect_total else EXIT_CLEAN
 
     if has_reference:
-        cells.insert(0, (ref_fit, ["REFERENCE", args.reference.name[:34], f"{aw}x{ah}"], False))
+        cells.insert(0, (ref_fit, ["REFERENCE", args.reference.name[:34], f"{aw}x{ah}"], False, [], []))
     sheet_path = out / "contact-sheet.png"
     cv2.imwrite(str(sheet_path), contact_sheet(cells, aw, ah))
 
@@ -627,13 +838,20 @@ def run(args):
             "threshold": args.threshold,
             "prev_threshold": args.prev_threshold,
             "match_light": args.match_light,
+            "suspects": args.suspects,
             "ssim": SSIM_TEXT,
         },
         "crops": [{"name": name, "box": list(box_)} for name, box_ in args.crop],
         "summary": summary,
         "flagged": [
-            {k: s[k] for k in ("index", "frame", "time", "file", "flags")} for s in samples if s["flagged"]
+            {
+                **{k: s[k] for k in ("index", "frame", "time", "file", "flags")},
+                "evidence": [e["file"] for e in s["evidence"]],
+            }
+            for s in samples
+            if s["flagged"]
         ],
+        "review": review,
         "samples": samples,
     }
     text = json.dumps(doc, indent=2, allow_nan=False) + "\n"
@@ -649,6 +867,8 @@ def main(argv=None):
         parser.error("--every must be 1 or more")
     if args.sample_fps is not None and args.sample_fps <= 0:
         parser.error("--fps must be above 0")
+    if args.suspects < 0:
+        parser.error("--suspects must be 0 or more")
     if args.start < 0:
         parser.error("--start must be 0 or more")
     if args.end is not None and args.end <= args.start:

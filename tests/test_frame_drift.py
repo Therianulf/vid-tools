@@ -12,6 +12,10 @@ import numpy as np
 import pytest
 
 from frame_drift import (
+    EVIDENCE_CAPTION_H,
+    EVIDENCE_HEADER_H,
+    EVIDENCE_PANEL_H,
+    SHEET_GAP,
     DriftError,
     center_crop_box,
     check_crops,
@@ -24,6 +28,7 @@ from frame_drift import (
     sample_frames,
     sheet_size,
     ssim,
+    suspect_regions,
     verdict_line,
 )
 from video_looper import frame_similarity, load_video_info, read_frame_at, scan_for_loop_points, scan_for_shifts
@@ -34,7 +39,7 @@ STEADY = (8, 20, 40, 40)  # a crop that never changes
 CHANGE = (140, 20, 40, 40)  # a crop replaced with other texture from frame 24
 TOP_KEYS = [
     "tool", "version", "verdict", "exit_code", "output_dir", "drift_json", "contact_sheet", "legend",
-    "input", "reference", "settings", "crops", "summary", "flagged", "samples",
+    "input", "reference", "settings", "crops", "summary", "flagged", "review", "samples",
 ]
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
@@ -260,7 +265,7 @@ def make_summary(flagged, failed, first_below):
     for name, count in failed.items():
         checks[name]["failed"] = count
         checks[name]["first_below"] = first_below[name]
-    return {"samples": 21, "flagged_samples": flagged, "checks": checks}
+    return {"samples": 21, "flagged_samples": flagged, "checks": checks, "review": flagged, "suspects": 0}
 
 
 def test_verdict_line():
@@ -274,8 +279,14 @@ def test_verdict_line():
         },
     )
     assert verdict_line(summary) == (
-        "FLAGGED: face_left below 0.6 SSIM vs reference from 1.75 s (7 of 21 samples); also face_left:ssim_prev"
+        "FLAGGED: face_left below 0.6 SSIM vs reference from 1.75 s (7 of 21 samples); also face_left:ssim_prev; "
+        "7 regions to review"
     )
+    summary = make_summary(0, {}, {})
+    summary.update(review=1, suspects=1)
+    assert verdict_line(summary) == "REVIEW: 21 samples above thresholds; 1 changed region to review"
+    summary.update(review=2, suspects=2)
+    assert verdict_line(summary) == "REVIEW: 21 samples above thresholds; 2 changed regions to review"
 
 
 def test_sheet_size():
@@ -302,6 +313,7 @@ def test_help_fits_one_screen(monkeypatch, capsys):
         ["x.mp4", "--crop", "bad"],
         ["x.mp4", "--crop", "a=0,0,4,4", "--crop", "a=1,1,4,4"],
         ["x.png"],
+        ["x.mp4", "--suspects", "-1"],
     ],
 )
 def test_usage_errors_exit_1_without_stdout(argv, capsys):
@@ -359,7 +371,8 @@ def test_exit_codes(runs):
     proc, _ = runs["change"]
     assert proc.returncode == 2
     assert json.loads(proc.stdout)["verdict"] == (
-        "FLAGGED: change below 0.6 SSIM vs reference from 1.00 s (4 of 8 samples); also change:ssim_prev"
+        "FLAGGED: change below 0.6 SSIM vs reference from 1.00 s (4 of 8 samples); also change:ssim_prev; "
+        f"{len(json.loads(proc.stdout)['review'])} regions to review"
     )
 
 
@@ -482,7 +495,7 @@ def test_match_light_cli(light_clip, tmp_path):
     threshold = round(plain + 0.05, 2)
     off = run_light(folder, tmp_path / "off", threshold)
     assert off.returncode == 2
-    on = run_light(folder, tmp_path / "on", threshold, "--match-light")
+    on = run_light(folder, tmp_path / "on", threshold, "--match-light", "--suspects", "0")
     assert on.returncode == 0, on.stdout
     doc = json.loads(on.stdout)
     assert doc["settings"]["match_light"] is True
@@ -494,9 +507,110 @@ def test_match_light_cli(light_clip, tmp_path):
 @needs_ffmpeg
 def test_default_run_has_null_light_metrics(runs):
     doc = json.loads(runs["change"][0].stdout)
-    assert doc["version"] == "1.1"
+    assert doc["version"] == "1.2"
     assert doc["settings"]["match_light"] is False
     for sample in doc["samples"]:
         for region in (sample["whole"], *sample["crops"].values()):
             assert region["ssim_ref_lm"] is None
             assert region["ssim_prev_lm"] is None
+
+
+def test_suspect_regions_boxes():
+    sim = np.ones((200, 200))
+    sim[20:60, 20:80] = 0  # 60 wide, 40 tall
+    sim[120:150, 120:150] = 0
+    sim[190:193, 190:193] = 0  # a dot
+    found = suspect_regions(sim, 5, 100, 10)
+    assert [r["box"] for r in found] == [[10, 10, 80, 60], [110, 110, 50, 50]]
+    assert found[0]["area"] > found[1]["area"] >= 100
+    assert [r["box"] for r in suspect_regions(sim, 1, 100, 10)] == [[10, 10, 80, 60]]
+    assert suspect_regions(sim, 0, 100, 10) == []
+    corner = np.ones((200, 200))
+    corner[0:40, 0:40] = 0
+    assert suspect_regions(corner, 1, 100, 24)[0]["box"] == [0, 0, 64, 64]
+
+
+def test_suspect_regions_merge_overlaps():
+    sim = np.ones((200, 200))
+    sim[40:80, 40:80] = 0
+    sim[70:110, 70:110] = 0
+    found = suspect_regions(sim, 5, 100, 10)
+    assert len(found) == 1
+    assert found[0]["box"] == [30, 30, 90, 90]
+
+
+def square_clip(folder):
+    base = texture(1)
+    lit = base.copy()
+    lit[40:70, 80:110] = 255
+    write_clip(folder / "square.mp4", [base] * (FRAMES // 2) + [lit] * (FRAMES // 2))
+
+
+@pytest.fixture(scope="module")
+def square(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("square")
+    if shutil.which("ffmpeg") is not None:
+        square_clip(folder)
+    return folder
+
+
+def run_square(folder, out, *extra):
+    cmd = [sys.executable, str(ROOT / "frame_drift.py"), str(folder / "square.mp4"), "-o", str(out), *extra]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+@needs_ffmpeg
+def test_suspect_found_and_evidence_written(square, tmp_path):
+    proc = run_square(square, tmp_path, "--prev-threshold", "0.1")
+    assert proc.returncode == 2, proc.stdout
+    doc = json.loads(proc.stdout)
+    assert doc["verdict"].startswith("REVIEW")
+    entry = next(r for r in doc["review"] if r["reason"] == "suspect")
+    x, y, w, h = entry["box"]
+    assert x <= 95 <= x + w and y <= 55 <= y + h
+    image = cv2.imread(entry["evidence"])
+    panel_w = round(w * EVIDENCE_PANEL_H / h)
+    assert image.shape == (
+        SHEET_GAP * 3 + EVIDENCE_HEADER_H + EVIDENCE_PANEL_H + EVIDENCE_CAPTION_H,
+        SHEET_GAP + 3 * (panel_w + SHEET_GAP),
+        3,
+    )
+    assert doc["summary"]["suspects"] >= 1
+    assert doc["summary"]["review"] == len(doc["review"])
+    sample = doc["samples"][entry["index"]]
+    assert sample["suspects"][0]["evidence"] == entry["evidence"]
+    assert sample["evidence"][0]["file"] == entry["evidence"]
+
+
+@needs_ffmpeg
+def test_no_suspects_option(square, tmp_path):
+    proc = run_square(square, tmp_path, "--prev-threshold", "0.1", "--suspects", "0")
+    assert proc.returncode == 0, proc.stdout
+    doc = json.loads(proc.stdout)
+    assert doc["review"] == []
+    assert all(s["suspects"] == [] for s in doc["samples"])
+    assert doc["settings"]["suspects"] == 0
+
+
+@needs_ffmpeg
+def test_clean_clip_has_no_suspects(runs):
+    proc, out = runs["clean"]
+    doc = json.loads(proc.stdout)
+    assert proc.returncode == 0
+    assert doc["verdict"].startswith("CLEAN")
+    assert doc["review"] == []
+    assert all(s["suspects"] == [] and s["evidence"] == [] for s in doc["samples"])
+
+
+@needs_ffmpeg
+def test_flagged_crop_gets_evidence_and_review_entry(runs):
+    proc, out = runs["change"]
+    doc = json.loads(proc.stdout)
+    flag_entries = [r for r in doc["review"] if r["reason"].startswith("flag:")]
+    assert flag_entries
+    entry = next(r for r in flag_entries if r["region"] == "change" and r["index"] == 4)
+    assert entry["reason"] == "flag:change:ssim_ref<0.6,change:ssim_prev<0.5"
+    assert entry["box"] == [140, 20, 40, 40]
+    assert Path(entry["evidence"]) == out.resolve() / "evidence" / "s0004-change.png"
+    assert Path(entry["evidence"]).is_file()
+    assert all(f["evidence"] for f in doc["flagged"])
