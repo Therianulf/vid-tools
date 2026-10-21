@@ -17,6 +17,7 @@ from frame_drift import (
     check_crops,
     fit_to_size,
     main,
+    match_light,
     parse_crop,
     parse_size,
     sample_flags,
@@ -414,3 +415,88 @@ def test_crop_outside_frame_exit_1(clips, tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "outside the 192x108" in captured.err
+
+
+def light_texture():
+    """A textured 200x200 uint8 image, stretched to 0..255."""
+    rng = np.random.default_rng(3)
+    noise = rng.integers(0, 256, (200, 200), dtype=np.uint8)
+    blurred = cv2.GaussianBlur(noise, (7, 7), 0).astype(np.float64)
+    return ((blurred - blurred.min()) / (blurred.max() - blurred.min()) * 255).round().astype(np.uint8)
+
+
+def change_light(img):
+    """Gamma 2.2, then a contrast and brightness change."""
+    lit = (img / 255.0) ** 2.2 * 255 * 0.7 + 30
+    return np.clip(lit, 0, 255).astype(np.uint8)
+
+
+def test_match_light_identity_and_monotone_lut():
+    img = light_texture()
+    assert np.array_equal(match_light(img, img), img)
+    ref = change_light(img)
+    mapped = match_light(img, ref)
+    order = np.argsort(img.ravel(), kind="stable")
+    assert (np.diff(mapped.ravel()[order].astype(int)) >= 0).all()
+
+
+def test_match_light_forgives_light_not_shape():
+    ref = light_texture()
+    light = change_light(ref)
+    shape = np.roll(ref, 15, axis=1)
+    plain = ssim(light, ref)
+    matched = ssim(match_light(light, ref), ref)
+    shifted = ssim(match_light(shape, ref), ref)
+    print(f"plain {plain:.4f} matched {matched:.4f} shifted {shifted:.4f}")
+    assert matched > 0.9
+    assert matched - plain >= 0.15
+    assert shifted < 0.6
+
+
+@pytest.fixture(scope="module")
+def light_clip(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("light")
+    base = texture(1)
+    x, y, w, h = CHANGE
+    lit = base.copy()
+    lit[y:y + h, x:x + w] = change_light(base[y:y + h, x:x + w])
+    cv2.imwrite(str(folder / "reference.png"), base)
+    if shutil.which("ffmpeg") is not None:
+        write_clip(folder / "light.mp4", [base] * (FRAMES // 2) + [lit] * (FRAMES // 2))
+    return folder, ssim(gray_of(1)[y:y + h, x:x + w], cv2.cvtColor(lit, cv2.COLOR_BGR2GRAY)[y:y + h, x:x + w])
+
+
+def run_light(folder, tmp_path, threshold, *extra):
+    cmd = [
+        sys.executable, str(ROOT / "frame_drift.py"), str(folder / "light.mp4"),
+        "--reference", str(folder / "reference.png"), "--crop", "lit=140,20,40,40",
+        "--threshold", str(threshold), "-o", str(tmp_path), *extra,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+@needs_ffmpeg
+def test_match_light_cli(light_clip, tmp_path):
+    folder, plain = light_clip
+    print(f"plain crop SSIM {plain:.4f}")
+    threshold = round(plain + 0.05, 2)
+    off = run_light(folder, tmp_path / "off", threshold)
+    assert off.returncode == 2
+    on = run_light(folder, tmp_path / "on", threshold, "--match-light")
+    assert on.returncode == 0, on.stdout
+    doc = json.loads(on.stdout)
+    assert doc["settings"]["match_light"] is True
+    assert all(key.endswith("_lm") for key in (k.split(":")[1] for k in doc["summary"]["checks"]))
+    assert doc["samples"][-1]["crops"]["lit"]["ssim_ref"] < threshold
+    assert doc["samples"][-1]["crops"]["lit"]["ssim_ref_lm"] >= threshold
+
+
+@needs_ffmpeg
+def test_default_run_has_null_light_metrics(runs):
+    doc = json.loads(runs["change"][0].stdout)
+    assert doc["version"] == "1.1"
+    assert doc["settings"]["match_light"] is False
+    for sample in doc["samples"]:
+        for region in (sample["whole"], *sample["crops"].values()):
+            assert region["ssim_ref_lm"] is None
+            assert region["ssim_prev_lm"] is None

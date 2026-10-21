@@ -24,7 +24,7 @@ sheet and the JSON.
 ```
 python frame_drift.py [-h] [--reference PATH] [--every N | --fps F] [--start S] [--end S]
                       [--size WxH] [--crop NAME=X,Y,W,H] [--threshold SSIM]
-                      [--prev-threshold SSIM] [-o DIR] INPUT
+                      [--prev-threshold SSIM] [--match-light] [-o DIR] INPUT
 ```
 
 ## Options
@@ -41,6 +41,7 @@ python frame_drift.py [-h] [--reference PATH] [--every N | --fps F] [--start S] 
 | `--crop NAME=X,Y,W,H` | none | Named region in analysis pixels; repeatable. Names are letters, digits, `_` and `-`; `whole` is reserved. The crop must lie inside the frame. |
 | `--threshold SSIM` | 0.6 | Flag SSIM vs reference below this. |
 | `--prev-threshold SSIM` | 0.5 | Flag SSIM vs previous sample below this. |
+| `--match-light` | off | Also score light-matched SSIM (`ssim_ref_lm`, `ssim_prev_lm`) and flag on it instead of the plain SSIM. The plain scores stay reported. |
 | `-o, --out DIR` | `output/<input stem>-drift` | Output folder. Re-running replaces the earlier sample PNGs. |
 
 A still ignores `--every`, `--fps`, `--start` and `--end`.
@@ -49,6 +50,10 @@ A still ignores `--every`, `--fps`, `--start` and `--end`.
 
 - `ssim_*`: Wang et al. 2004 on luma (OpenCV BGR2GRAY), Gaussian 11x11 sigma 1.5, K1 0.01, K2 0.03, edges reflected;
   the mean of the SSIM map over the whole frame or inside each crop. These are thresholded.
+- `ssim_ref_lm`, `ssim_prev_lm`: with `--match-light`, the same SSIM after the sample's grey levels in the region are
+  histogram-matched (CDF matching) to the reference's (or the previous sample's) same region. A light change that keeps
+  the shapes scores near 1; shape drift still scores low. With `--match-light` these are thresholded instead of
+  `ssim_ref` and `ssim_prev`, and the check names and the verdict say so; null otherwise.
 - `loop_score_*`: the loop finder's `frame_similarity`, 40% grey histogram correlation plus 60% inverse MSE at 64x64.
   Reported, not thresholded.
 
@@ -87,11 +92,11 @@ approximate times (`frame / average fps`). A long take at `--every 1` grows the 
 | `legend` | What each metric and field means. |
 | `input` | `path`, `kind` (video or still), `native_size`, `fps`, `total_frames`, `duration`, `crop_to_aspect`. |
 | `reference` | null, or `path`, `native_size`, `crop_to_aspect`. |
-| `settings` | `analysis_size`, `every`, `sample_fps`, `start`, `end`, `threshold`, `prev_threshold`, `ssim`. |
+| `settings` | `analysis_size`, `every`, `sample_fps`, `start`, `end`, `threshold`, `prev_threshold`, `match_light`, `ssim`. |
 | `crops` | `[{name, box}]` in CLI order. |
 | `summary` | `samples`, `flagged_samples`, `checks`, `metrics`, `worst`. |
 | `flagged` | Flagged samples only: `index`, `frame`, `time`, `file`, `flags`. |
-| `samples` | Every sample: `index`, `frame`, `time`, `file`, `flagged`, `flags`, `whole` and `crops` (each with `ssim_ref`, `ssim_prev`, `loop_score_ref`, `loop_score_prev`). |
+| `samples` | Every sample: `index`, `frame`, `time`, `file`, `flagged`, `flags`, `whole` and `crops` (each with `ssim_ref`, `ssim_prev`, `ssim_ref_lm`, `ssim_prev_lm`, `loop_score_ref`, `loop_score_prev`). |
 | `samples[]` | A metric is null when it does not apply (no reference; the first sample has no previous one). |
 | `summary.checks` | Per `region:metric`: `threshold`, `failed`, `first_below` (`index`, `frame`, `time`, or null). |
 | `summary.metrics` | Per region and metric: `min`, `mean`, `min_index`. |
@@ -128,7 +133,9 @@ python frame_drift.py "$T/beat1-take-04-gen45-5s.mp4" --reference "$T/beat1-redo
 
 Read: exit 2 or 0; `verdict` names the first crop and time; `flagged[]` lists each flagged sample's time, file and
 failed checks; `summary.checks["face_left:ssim_ref"].first_below`; `summary.metrics.face_left.ssim_ref.min`;
-`summary.worst`; then open `contact_sheet`.
+`summary.worst`; then open `contact_sheet`. For takes whose light changes across the faces (game light, flicker), add
+`--match-light`, and read both `ssim_*_lm` (flagged) and the plain `ssim_*` (reported): a face whose plain SSIM falls
+while its light-matched SSIM holds is light, not drift.
 
 (c) A take alone, frame to frame:
 

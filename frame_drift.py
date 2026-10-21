@@ -32,7 +32,7 @@ import numpy as np
 
 from video_looper import frame_similarity, iter_frames, load_video_info
 
-TOOL_VERSION = "1.0"  # bump when the JSON document changes shape
+TOOL_VERSION = "1.1"  # bump when the JSON document changes shape
 DEFAULT_EVERY = 6  # every 6th frame: 4 samples a second at 24 fps, 21 samples on a 5 s take
 DEFAULT_THRESHOLD = 0.6  # SSIM vs reference; on take-04 static parts stayed above 0.78, drifting faces fell below 0.6
 DEFAULT_PREV_THRESHOLD = 0.5  # SSIM vs previous sample; half the structure gone in one step (0.25 s at the defaults)
@@ -68,6 +68,15 @@ LEGEND = {
         "SSIM of the sample against the previous sample; a drop is a jump between samples; "
         "below settings.prev_threshold is flagged"
     ),
+    "ssim_ref_lm": (
+        "with --match-light: SSIM against the reference after the sample's grey levels in the region are "
+        "histogram-matched to the reference's (CDF matching); a light change that keeps the shapes scores near 1, "
+        "shape drift still scores low; flagged instead of ssim_ref when --match-light is on; null otherwise"
+    ),
+    "ssim_prev_lm": (
+        "the same against the previous sample; flagged instead of ssim_prev when --match-light is on; "
+        "null otherwise"
+    ),
     "loop_score_ref": (
         "video_looper.py frame_similarity against the reference "
         "(40% grey histogram correlation, 60% inverse MSE at 64x64); reported, not thresholded"
@@ -90,7 +99,7 @@ stdout: one JSON document (verdict, flagged samples, paths, per-sample scores),
         also written to <out>/drift.json. Progress and errors go to stderr.
 exit: 0 clean, 2 a sample crossed a threshold, 1 usage or runtime error.
 """
-METRIC_NAMES = ("ssim_ref", "ssim_prev", "loop_score_ref", "loop_score_prev")
+METRIC_NAMES = ("ssim_ref", "ssim_prev", "ssim_ref_lm", "ssim_prev_lm", "loop_score_ref", "loop_score_prev")
 
 
 class DriftError(Exception):
@@ -184,6 +193,14 @@ def ssim(gray_a, gray_b):
     return float(ssim_map(gray_a, gray_b).mean())
 
 
+def match_light(src, ref):
+    """src's grey levels remapped so its histogram matches ref's (CDF matching); both uint8 arrays."""
+    s_cdf = np.cumsum(np.bincount(src.ravel(), minlength=256)) / src.size
+    r_cdf = np.cumsum(np.bincount(ref.ravel(), minlength=256)) / ref.size
+    lut = np.searchsorted(r_cdf, s_cdf, side="left").clip(0, 255).astype(np.uint8)
+    return lut[src]
+
+
 def sample_frames(total_frames, fps, every=None, sample_fps=None, start=0.0, end=None):
     """Frame numbers to sample, in order."""
     first = round(start * fps)
@@ -213,27 +230,40 @@ def check_crops(crops, size):
             raise DriftError(f"crop {name} {x},{y},{w},{h} is outside the {aw}x{ah} analysis frame")
 
 
-def region_metrics(frame, ref, prev, ref_map, prev_map, box):
-    """The four metrics inside box (x, y, w, h), rounded to 4 places; None where there is nothing to compare."""
+def region_metrics(frame, ref, prev, ref_map, prev_map, box, gray=None, ref_gray=None, prev_gray=None, light=False):
+    """The six metrics inside box (x, y, w, h), rounded to 4 places; None where there is nothing to compare.
+
+    The light-matched pair is scored only when light is True."""
     x, y, w, h = box
     sl = (slice(y, y + h), slice(x, x + w))
+
+    def lm(other):
+        if not light or other is None:
+            return None
+        g = gray[sl]
+        r = other[sl]
+        return round(ssim(match_light(g, r), r), 4)
+
     return {
         "ssim_ref": None if ref_map is None else round(float(ref_map[sl].mean()), 4),
         "ssim_prev": None if prev_map is None else round(float(prev_map[sl].mean()), 4),
+        "ssim_ref_lm": lm(ref_gray),
+        "ssim_prev_lm": lm(prev_gray),
         "loop_score_ref": None if ref is None else round(float(frame_similarity(frame[sl], ref[sl])), 4),
         "loop_score_prev": None if prev is None else round(float(frame_similarity(frame[sl], prev[sl])), 4),
     }
 
 
-def check_names(crop_names, has_reference):
+def check_names(crop_names, has_reference, light=False):
     """Thresholded checks in report order: whole first, then crops in CLI order; ssim_ref before ssim_prev."""
-    metrics = (["ssim_ref"] if has_reference else []) + ["ssim_prev"]
+    suffix = "_lm" if light else ""
+    metrics = ([f"ssim_ref{suffix}"] if has_reference else []) + [f"ssim_prev{suffix}"]
     return [f"{region}:{metric}" for region in ["whole", *crop_names] for metric in metrics]
 
 
 def check_limit(check, threshold, prev_threshold):
     """The threshold a check is held to."""
-    return threshold if check.endswith(":ssim_ref") else prev_threshold
+    return threshold if ":ssim_ref" in check else prev_threshold
 
 
 def check_value(record, check):
@@ -254,7 +284,7 @@ def sample_flags(record, checks, threshold, prev_threshold):
     return flags
 
 
-def summarize(samples, crop_names, checks, threshold, prev_threshold, has_reference):
+def summarize(samples, crop_names, checks, threshold, prev_threshold, has_reference, light=False):
     """Counts, per-check failures, per-region metric ranges and the worst samples."""
     check_info = {}
     for check in checks:
@@ -288,7 +318,7 @@ def summarize(samples, crop_names, checks, threshold, prev_threshold, has_refere
             else:
                 metric_info[region][metric] = {"min": None, "mean": None, "min_index": None}
 
-    metric = "ssim_ref" if has_reference else "ssim_prev"
+    metric = ("ssim_ref" if has_reference else "ssim_prev") + ("_lm" if light else "")
     candidates = []
     for s in samples:
         best = None
@@ -323,10 +353,11 @@ def verdict_line(summary):
     first = min(fired, key=lambda c: summary["checks"][c]["first_below"]["index"])
     region, metric = first.split(":")
     label = "whole frame" if region == "whole" else region
-    against = "reference" if metric == "ssim_ref" else "previous sample"
+    against = "reference" if metric.startswith("ssim_ref") else "previous sample"
+    word = "light-matched SSIM" if metric.endswith("_lm") else "SSIM"
     info = summary["checks"][first]
     line = (
-        f"FLAGGED: {label} below {info['threshold']:g} SSIM vs {against} "
+        f"FLAGGED: {label} below {info['threshold']:g} {word} vs {against} "
         f"from {info['first_below']['time']:.2f} s ({summary['flagged_samples']} of {n} {noun})"
     )
     others = [c for c in fired if c != first]
@@ -375,12 +406,15 @@ def fmt2(v):
     return "--" if v is None else f"{v:.2f}"
 
 
-def sample_label(record, has_reference):
+def sample_label(record, has_reference, light=False):
     """The three contact-sheet label lines for a sample."""
     whole = record["whole"]
     line1 = f"#{record['index']} f{record['frame']} {record['time']:.2f}s" + (" FLAG" if record["flagged"] else "")
-    line2 = f"ref {fmt2(whole['ssim_ref'])}  prev {fmt2(whole['ssim_prev'])}"
-    metric = "ssim_ref" if has_reference else "ssim_prev"
+    if light:
+        line2 = f"lm ref {fmt2(whole['ssim_ref_lm'])}  prev {fmt2(whole['ssim_prev_lm'])}"
+    else:
+        line2 = f"ref {fmt2(whole['ssim_ref'])}  prev {fmt2(whole['ssim_prev'])}"
+    metric = ("ssim_ref" if has_reference else "ssim_prev") + ("_lm" if light else "")
     best = None
     for name, values in record["crops"].items():
         value = values[metric]
@@ -425,6 +459,9 @@ def build_parser():
     parser.add_argument(
         "--prev-threshold", type=float, default=DEFAULT_PREV_THRESHOLD, metavar="SSIM",
         help="flag SSIM vs previous sample below this (default 0.5)",
+    )
+    parser.add_argument(
+        "--match-light", action="store_true", help="also score light-matched SSIM and flag on it instead"
     )
     parser.add_argument(
         "-o", "--out", type=Path, metavar="DIR", help="output folder (default output/<input stem>-drift)"
@@ -495,7 +532,7 @@ def run(args):
     log(f"frame_drift: sampling {len(planned)} frames at {aw}x{ah}")
 
     crop_names = [name for name, _ in args.crop]
-    checks = check_names(crop_names, has_reference)
+    checks = check_names(crop_names, has_reference, args.match_light)
     if still:
         source = [(0, still_image)]
     else:
@@ -522,9 +559,13 @@ def run(args):
             "file": str(file),
             "flagged": False,
             "flags": [],
-            "whole": region_metrics(fit, ref_fit, prev, ref_map, prev_map, (0, 0, aw, ah)),
+            "whole": region_metrics(
+                fit, ref_fit, prev, ref_map, prev_map, (0, 0, aw, ah), gray, ref_gray, prev_gray, args.match_light
+            ),
             "crops": {
-                name: region_metrics(fit, ref_fit, prev, ref_map, prev_map, box_)
+                name: region_metrics(
+                    fit, ref_fit, prev, ref_map, prev_map, box_, gray, ref_gray, prev_gray, args.match_light
+                )
                 for name, box_ in args.crop
             },
         }
@@ -536,14 +577,16 @@ def run(args):
             input_box = box
         prev, prev_gray = fit, gray
         samples.append(record)
-        cells.append((fit, sample_label(record, has_reference), record["flagged"]))
+        cells.append((fit, sample_label(record, has_reference, args.match_light), record["flagged"]))
 
     if not samples:
         raise DriftError(f"no frames could be read from {path}")
     if len(samples) < len(planned):
         log(f"frame_drift: warning: read {len(samples)} of {len(planned)} planned samples; the stream ended early")
 
-    summary = summarize(samples, crop_names, checks, args.threshold, args.prev_threshold, has_reference)
+    summary = summarize(
+        samples, crop_names, checks, args.threshold, args.prev_threshold, has_reference, args.match_light
+    )
     verdict = verdict_line(summary)
     code = EXIT_FLAGGED if summary["flagged_samples"] else EXIT_CLEAN
 
@@ -583,6 +626,7 @@ def run(args):
             "end": None if still else args.end,
             "threshold": args.threshold,
             "prev_threshold": args.prev_threshold,
+            "match_light": args.match_light,
             "ssim": SSIM_TEXT,
         },
         "crops": [{"name": name, "box": list(box_)} for name, box_ in args.crop],
