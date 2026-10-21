@@ -21,8 +21,8 @@ Requirements:
 
 import argparse
 import os
-import sys
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -71,6 +71,20 @@ def read_frame_at(path, frame_number):
     return frame
 
 
+def iter_frames(video_path, start_frame, stop_frame):
+    """Yield (frame_number, frame) in order from start_frame up to stop_frame (exclusive); stops if the stream ends."""
+    cap = cv2.VideoCapture(video_path)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    try:
+        for frame_num in range(start_frame, stop_frame):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            yield frame_num, frame
+    finally:
+        cap.release()
+
+
 def frame_similarity(frame_a, frame_b):
     """Compute visual similarity score between two frames (0-1).
 
@@ -106,23 +120,14 @@ def scan_for_loop_points(video_path, fps, total_frames, start_second, count):
 
     print(f"Scanning frames {start_frame}-{total_frames - 1} against frame 0...")
 
-    cap = cv2.VideoCapture(video_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
     scores = []
-    for frame_num in range(start_frame, total_frames):
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    for frame_num, frame in iter_frames(video_path, start_frame, total_frames):
         score = frame_similarity(frame_0, frame)
         scores.append((frame_num, frame_num / fps, score))
 
         if (frame_num - start_frame) % 30 == 0:
             pct = (frame_num - start_frame) / (total_frames - start_frame) * 100
             print(f"  Progress: {pct:.0f}% (frame {frame_num})")
-
-    cap.release()
 
     # Sort by similarity score descending
     scores.sort(key=lambda x: x[2], reverse=True)
@@ -143,19 +148,14 @@ def scan_for_shifts(video_path, fps, total_frames, start_second, count):
 
     print(f"Scanning frames {start_frame}-{total_frames - 1} for visual shifts...")
 
-    cap = cv2.VideoCapture(video_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame - 1)
-    ret, prev_frame = cap.read()
-    if not ret:
-        cap.release()
+    frames = iter_frames(video_path, start_frame - 1, total_frames)
+    first = next(frames, None)
+    if first is None:
         return []
+    _, prev_frame = first
 
     scores = []
-    for frame_num in range(start_frame, total_frames):
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    for frame_num, frame in frames:
         # Compute frame-to-frame difference (inverse similarity = shift magnitude)
         diff = 1.0 - frame_similarity(prev_frame, frame)
         scores.append((frame_num, frame_num / fps, diff))
@@ -164,8 +164,6 @@ def scan_for_shifts(video_path, fps, total_frames, start_second, count):
         if (frame_num - start_frame) % 30 == 0:
             pct = (frame_num - start_frame) / (total_frames - start_frame) * 100
             print(f"  Progress: {pct:.0f}% (frame {frame_num})")
-
-    cap.release()
 
     # Sort by shift magnitude descending
     scores.sort(key=lambda x: x[2], reverse=True)
@@ -414,7 +412,7 @@ Examples:
                 comp_path = os.path.join(output_dir, f"{basename}_candidate_{rank}.png")
                 save_comparison(frame_0, loop_frame, comp_path)
 
-        print(f"\nUse --loop-second <time> to create a loop at the chosen point.")
+        print("\nUse --loop-second <time> to create a loop at the chosen point.")
         return
 
     # === SCAN-SHIFT MODE ===
@@ -442,8 +440,8 @@ Examples:
                 comp_path = os.path.join(output_dir, f"{basename}_shift_{rank}.png")
                 save_comparison(before, after, comp_path)
 
-        print(f"\nThese frames have the biggest visual change from the previous frame.")
-        print(f"Use --loop-second <time> to create a loop at the chosen point.")
+        print("\nThese frames have the biggest visual change from the previous frame.")
+        print("Use --loop-second <time> to create a loop at the chosen point.")
         return
 
     # === LOOP MODE ===

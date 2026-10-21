@@ -7,7 +7,8 @@
 - Every tool is a standalone Python script in the project root with a `main()` and an
   `if __name__ == "__main__"` guard, and the shebang `#!/usr/bin/env python3`.
 - Simple tools parse `sys.argv`; tools with several flags or options use `argparse`.
-- File paths use `pathlib.Path`; status and progress messages go to stdout.
+- File paths use `pathlib.Path`; status and progress messages go to stdout, except in an agent-facing
+  tool, whose stdout is one JSON document and whose progress goes to stderr ([frame-drift.md](frame-drift.md)).
 - Output goes to `output/` (created automatically, gitignored) unless the user gives an explicit
   output path, which is used as given. Source and input media go in `src/` (gitignored).
 - Video tools write both a simple and an interpolated variant, for side-by-side comparison.
@@ -43,6 +44,9 @@
   `trailer_cut.py`. [trailer-cut.md](trailer-cut.md).
 - `trailer_rings.py` — renders a trailer beat's broadcast rings overlay as PNG frames; used by
   `trailer_cut.py`, and runs alone to preview a beat. [trailer-cut.md](trailer-cut.md#rings).
+- `frame_drift.py` — scores a take or still for drift (SSIM and the loop finder's score vs a reference still and frame to
+  frame, whole frame and named crops); agent-facing: one JSON document on stdout, exit 0 clean, 2 flagged, 1 error.
+  [frame-drift.md](frame-drift.md).
 
 ## Context
 

@@ -76,6 +76,15 @@ python trailer_cut.py --spec trailer-specs/coop-comms-v1.json \
   --take take.mp4 --shots store-shots --brand brand --voice vo [--music music.wav] out.mp4
 ```
 
+### frame_drift.py — Frame Drift Check
+
+Scores an AI video take (or one still) for drift: SSIM and the loop finder's similarity score against an approved reference still and against the previous sample, over the whole frame and named crops such as faces. Built on `video_looper.py --scan`. Made for agents: stdout is one JSON document, progress goes to stderr, and the exit code is the verdict (0 clean, 2 flagged, 1 error). See [frame-drift.md](frame-drift.md).
+
+```bash
+python frame_drift.py take.mp4 --reference still.png --size 1920x1080 \
+  --crop face_left=400,240,240,260 --crop mic=900,620,130,160 -o output/take-drift
+```
+
 ## Installation
 
 ```bash
