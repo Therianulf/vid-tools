@@ -4,7 +4,7 @@
 shots with a slow push, an end card), the on-screen line for each beat, the voice-over, and the audio
 numbers. The tool cuts the picture, lays the lines over it, mixes the voice, ducks an optional music
 bed under the voice, and writes an MP4 plus a thumbnail. `trailer_cards.py` draws the text and end card
-PNGs for it.
+PNGs for it, and `trailer_rings.py` draws the optional broadcast rings (see Rings).
 
 ```
 python trailer_cut.py --spec trailer-specs/coop-comms-v1.json \
@@ -144,7 +144,7 @@ of -1.5 dBFS.
 
 ## Requirements
 
-`ffmpeg`, `ffprobe`, `rsvg-convert` (`brew install librsvg`) and Python 3 with Pillow. This ffmpeg has no
+`ffmpeg`, `ffprobe`, `rsvg-convert` (`brew install librsvg`) and Python 3 with Pillow and numpy. This ffmpeg has no
 `drawtext`, so the text is drawn as PNGs and laid over the picture. The lines are set with Pillow's raqm layout (kerning), which needs `libfribidi`
 (`brew install fribidi`; Homebrew's librsvg already brings it). When the Python running the tool cannot find it, as
 with the python.org build in our venv, the tool re-runs itself with `DYLD_FALLBACK_LIBRARY_PATH` pointing at
@@ -154,7 +154,7 @@ Homebrew's lib folder; without fribidi it stops rather than set the lines withou
 
 The spec belongs with the commercial. The CO-OP Comms commercial repo (coop-comms-ad-ep1) owns it, at
 `script/coop-comms-v1.json` there. The copy here is the worked example and the fixture
-`tests/test_trailer.py` loads.
+`tests/test_trailer.py` and `tests/test_rings.py` load.
 
 ## Origin
 
