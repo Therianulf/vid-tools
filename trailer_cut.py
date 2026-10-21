@@ -93,8 +93,10 @@ def video_graph(spec, cards_texts, ring_inputs=None):
         elif kind == "still" and "push" in beat:
             push = beat["push"]
             frames = round(beat["seconds"] * fps)
+            ss = push.get("supersample", 1)
+            up = f"scale=iw*{ss}:ih*{ss}:flags=lanczos," if ss > 1 else ""
             chain = (
-                f"[{i}:v]zoompan=z='1+{fmt(push.get('zoom', 0.15))}*on/({frames}-1)'"
+                f"[{i}:v]{up}zoompan=z='1+{fmt(push.get('zoom', 0.15))}*on/({frames}-1)'"
                 f":x='(iw-iw/zoom)*{fmt(push['x'])}':y='(ih-ih/zoom)*{fmt(push['y'])}'"
                 f":d=1:s={w}x{h}:fps={fps},setsar=1"
             )
@@ -342,6 +344,14 @@ def main():
                 f"beat {n} rings: need 0 <= start < end <= {fmt(beat['seconds'])} "
                 f"(start {fmt(settings['start'])}, end {fmt(end)})"
             )
+
+    # 8. Push supersample.
+    for n, beat in enumerate(beats, start=1):
+        if beat["kind"] != "still" or "supersample" not in beat.get("push", {}):
+            continue
+        ss = beat["push"]["supersample"]
+        if isinstance(ss, bool) or not isinstance(ss, int) or not 1 <= ss <= 8:
+            fail(f"beat {n} push: supersample must be a whole number from 1 to 8")
 
     with tempfile.TemporaryDirectory() as work_name:
         work = Path(work_name)

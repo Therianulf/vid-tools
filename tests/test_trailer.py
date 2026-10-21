@@ -65,6 +65,21 @@ def test_no_voice():
     assert args[null_at - 3 : null_at - 1] == ["-t", "15"]
 
 
+def test_push_supersample():
+    spec = copy.deepcopy(SPEC)
+    spec["beats"][1]["push"]["supersample"] = 4
+    graph = graph_of(build(spec=spec))
+    assert (
+        "[1:v]scale=iw*4:ih*4:flags=lanczos,zoompan=z='1+0.15*on/(90-1)':x='(iw-iw/zoom)*0.26'"
+        ":y='(ih-ih/zoom)*0.25':d=1:s=1920x1080:fps=30,setsar=1[b2]"
+    ) in graph
+    assert "[2:v]zoompan=" in graph
+
+
+def test_push_supersample_default_unchanged():
+    assert "scale=iw*" not in graph_of(build())
+
+
 def test_voice():
     args = build(voice=VOICE)
     graph = graph_of(args)
