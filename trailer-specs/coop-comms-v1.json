@@ -1,0 +1,83 @@
+{
+  "name": "coop-comms-v1",
+  "size": [1920, 1080],
+  "fps": 30,
+  "line_font": "fonts/AtkinsonHyperlegibleNext.ttf",
+  "cards": {
+    "background": "#121519",
+    "text_color": "#e9edf2",
+    "line_size": 64,
+    "line_weight": 600,
+    "tagline_size": 60,
+    "tagline_weight": 600
+  },
+  "brand": {
+    "wordmark": "wordmark.svg",
+    "wordmark_width": 1240,
+    "tagline_font": "fonts/Orbitron-wght.ttf"
+  },
+  "line_fade": {"at": 0.2, "seconds": 0.3},
+  "beats": [
+    {
+      "kind": "clip",
+      "seconds": 3.0,
+      "start": 0.0,
+      "fade_in": 0.4,
+      "line": "Two people, two PCs, one room.",
+      "voice": {"file": "vo-1.wav", "at": 0.2, "max": 2.6}
+    },
+    {
+      "kind": "still",
+      "seconds": 3.0,
+      "image": "co-op-comms-screenshot-01-3840x2160.png",
+      "push": {"zoom": 0.15, "x": 0.26, "y": 0.25},
+      "line": "The PC with the mic presses Host.",
+      "voice": {"file": "vo-2.wav", "at": 0.2, "max": 2.6}
+    },
+    {
+      "kind": "still",
+      "seconds": 3.0,
+      "image": "co-op-comms-screenshot-03-3840x2160.png",
+      "push": {"zoom": 0.15, "x": 0.83, "y": 0.25},
+      "line": "The other PC joins free. Press Join.",
+      "voice": {"file": "vo-3.wav", "at": 0.2, "max": 2.6}
+    },
+    {
+      "kind": "still",
+      "seconds": 3.5,
+      "image": "co-op-comms-screenshot-02-3840x2160.png",
+      "push": {"zoom": 0.15, "x": 0.26, "y": 0.37},
+      "line": "You both hear it, near instantly.",
+      "voice": {"file": "vo-4.wav", "at": 0.2, "max": 3.1}
+    },
+    {
+      "kind": "end_card",
+      "seconds": 2.5,
+      "fade_in": 0.3,
+      "tagline": "Hear the person next to you.",
+      "voice": {"file": "vo-5.wav", "at": 0.2, "max": 2.1}
+    }
+  ],
+  "voice": {"lufs": -16, "true_peak": -1.5, "lra": 11},
+  "music": {
+    "lufs": -24,
+    "true_peak": -3,
+    "lra": 11,
+    "min_seconds": 14.5,
+    "offset": 0.0,
+    "fade_in": 0.3,
+    "fade_out": 0.8,
+    "duck": {"threshold": 0.03, "ratio": 4, "attack": 20, "release": 400},
+    "limit": 0.84
+  },
+  "encode": {
+    "preset": "slow",
+    "profile": "high",
+    "video_bitrate": "20M",
+    "maxrate": "24M",
+    "bufsize": "40M",
+    "audio_bitrate": "192k",
+    "sample_rate": 48000
+  },
+  "thumbnail_at": 8.4
+}
