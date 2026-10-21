@@ -1,53 +1,57 @@
 # CLAUDE.md
 
-## Project Overview
+## Rules
 
-vid-tools is a collection of standalone Python CLI tools for video and image editing.
+- Add to this file one line at a time: the thing and its rule or symptom, linked to the doc that
+  holds the detail (a tool's own `.md` or its README section). Never a paragraph here.
+- Every tool is a standalone Python script in the project root with a `main()` and an
+  `if __name__ == "__main__"` guard, and the shebang `#!/usr/bin/env python3`.
+- Simple tools parse `sys.argv`; tools with several flags or options use `argparse`.
+- File paths use `pathlib.Path`; status and progress messages go to stdout.
+- Output goes to `output/` (created automatically, gitignored) unless the user gives an explicit
+  output path, which is used as given. Source and input media go in `src/` (gitignored).
+- Video tools write both a simple and an interpolated variant, for side-by-side comparison.
 
-## Project Structure
+## Contents
 
-- All tools are standalone Python scripts in the project root
-- Each script has a `main()` function and `if __name__ == "__main__"` guard
-- Tools output to the `output/` directory by default (created automatically, gitignored)
-- Source/input media goes in `src/` (gitignored)
-- `pyproject.toml` manages dependencies and entry points
+- `README.md` — install steps and usage for each tool that has a README section.
+- `video_looper.py` — seamless loop by cross-fading the tail into the head; `--scan`,
+  `--scan-shift`, `--loop-second`/`--loop-frame`, `--slowdown`, `--fade`; simple and
+  interpolated outputs. [README](README.md#video_looperpy--true-video-looper).
+- `video_slowmo_loop.py` — slow-motion loop with fade-to-black transitions and GPU frame
+  interpolation, for clips that fade to black and restart.
+  [README](README.md#video_slowmo_looppy--slow-motion-loop-creator).
+- `gen_qr.py` — QR code from a URL as web PNG, print PNG and SVG.
+  [README](README.md#gen_qrpy--qr-code-generator).
+- `remove_bg.py` — AI background removal from an image (rembg/U2-Net).
+  [README](README.md#remove_bgpy--background-removal).
+- `despill_green.py` — green spill removal from transparent PNGs.
+  [README](README.md#despill_greenpy--green-spill-removal).
+- `clean_green.py` — aggressive green artifact removal from transparent PNGs.
+  [README](README.md#clean_greenpy--green-artifact-removal).
+- `video_remove_bg.py` — frame-by-frame rembg background removal from video, with temporal alpha
+  smoothing; usage in its module docstring.
+- `bubble_cleanup.py` — extracts a speech bubble from video by brightness contour, no AI; usage in
+  its module docstring.
+- `frames_to_video.py` — assembles RGBA PNG frames into transparent HEVC or ProRes 4444 MOV; usage
+  in its module docstring.
+- `test_transparency.py` — composites a transparent video or PNG over a checkerboard to check the
+  alpha; usage in its module docstring.
+- `trailer_cut.py` — assembles a short trailer from a JSON spec in `trailer-specs/` (beats,
+  on-screen lines, voice-over, ducked music bed). [trailer-cut.md](trailer-cut.md).
+- `trailer_cards.py` — renders the trailer's lower-third and end card PNGs with Pillow; used by
+  `trailer_cut.py`. [trailer-cut.md](trailer-cut.md).
 
-## Tools
+## Context
 
-- `video_looper.py` — True video looper. Cross-fades tail into head for seamless loops. Has `--scan` (find frames similar to frame 0), `--scan-shift` (find natural visual transition points), `--loop-second`/`--loop-frame` (set cut point), `--slowdown` (slow down), `--fade` (cross-fade duration). Outputs both a simple (frame duplication) and interpolated (optical flow) version.
-- `video_slowmo_loop.py` — Slow-motion loop with fade-to-black transitions and GPU-accelerated frame interpolation. For clips that fade to black and restart.
-- `gen_qr.py` — QR code generator (web PNG, print PNG, SVG from a URL)
-- `remove_bg.py` — AI background removal (rembg/U2-Net)
-- `despill_green.py` — Green spill removal from transparent PNGs
-- `clean_green.py` — Aggressive green artifact removal from transparent PNGs
-- `trailer_cut.py` — Assembles a short trailer from a JSON spec (beats, on-screen lines, voice-over, ducked music bed). See [trailer-cut.md](trailer-cut.md).
-- `trailer_cards.py` — Renders a trailer's lower-third text and end card PNGs with Pillow; used by trailer_cut.py.
-
-## Conventions
-
-- Shebang: `#!/usr/bin/env python3`
-- Simple tools use `sys.argv` for argument parsing
-- Complex tools (multiple flags/options) use `argparse`
-- File paths use `pathlib.Path`
-- Status/progress messages go to stdout
-- When user provides an explicit output path, respect it; otherwise default to `output/`
-- Video tools produce both simple and interpolated variants for human comparison
-
-## Running Tools
-
-```bash
-source .venv/bin/activate
-python <tool>.py <args>
-```
-
-Venv is Python 3.11. System dependency: `ffmpeg` (install via `brew install ffmpeg`)
-
-## Dependencies
-
-Managed in `pyproject.toml`: torch, torchvision, opencv-python, numpy, rembg, Pillow, segno
-
-System: `rsvg-convert` (`brew install librsvg`) and `libfribidi` (`brew install fribidi`) for trailer_cut.py.
-
-## Linting
-
-Ruff: target Python 3.10, line length 120, rules E/F/I/N/W/UP
+- vid-tools is a collection of standalone Python CLI tools for video and image editing.
+- Layout: tools in the root; `tests/` (pytest); `trailer-specs/` (trailer JSON specs); `fonts/`
+  (Atkinson Hyperlegible Next and its OFL, the trailer line font).
+- Run: `source .venv/bin/activate`, then `python <tool>.py <args>`. The venv is Python 3.11.
+- Test: `.venv/bin/python -m pytest -q` (pytest, `tests/`); from a worktree, use the main
+  checkout's `.venv`. Lint: Ruff, target Python 3.10, line length 120, rules E/F/I/N/W/UP (config
+  in `pyproject.toml`). Both come with the dev extra: `pip install -e '.[dev]'`.
+- `pyproject.toml` manages dependencies (torch, torchvision, opencv-python, numpy, rembg, Pillow,
+  segno; dev: pytest, ruff) and the console entry points.
+- System dependencies: `ffmpeg` (`brew install ffmpeg`); for `trailer_cut.py`, `rsvg-convert`
+  (`brew install librsvg`) and `libfribidi` (`brew install fribidi`).

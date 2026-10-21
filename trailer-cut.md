@@ -108,8 +108,9 @@ Homebrew's lib folder; without fribidi it stops rather than set the lines withou
 
 ## Where the spec lives
 
-The spec belongs with the commercial. We ship the CO-OP Comms spec here as the worked example, until
-the CO-OP Comms commercial repo (coop-comms-ad-ep1) holds its own copy.
+The spec belongs with the commercial. The CO-OP Comms commercial repo (coop-comms-ad-ep1) owns it, at
+`script/coop-comms-v1.json` there. The copy here is the worked example and the fixture
+`tests/test_trailer.py` loads.
 
 ## Origin
 
