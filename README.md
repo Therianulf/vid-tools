@@ -78,7 +78,13 @@ python trailer_cut.py --spec trailer-specs/coop-comms-v1.json \
 
 ### frame_drift.py — Frame Drift Check
 
-Scores an AI video take (or one still) for drift: SSIM and the loop finder's similarity score against an approved reference still and against the previous sample, over the whole frame and named crops such as faces. Built on `video_looper.py --scan`. Made for agents: stdout is one JSON document, progress goes to stderr, and the exit code is the verdict (0 clean, 2 flagged, 1 error). See [frame-drift.md](frame-drift.md).
+Scores an AI video take (or one still) for drift: SSIM and the loop finder's similarity score
+against an approved reference still and against the previous sample, over the whole frame and named
+crops such as faces. It also finds changed regions on its own and writes an evidence image for each
+suspected area (previous | current | reference), listed in a `review[]` queue for a judge. Built on
+`video_looper.py --scan`. Made for agents: stdout is one JSON document, progress goes to stderr,
+and the exit code is the verdict (0 clean, 2 something to review, 1 error). See
+[frame-drift.md](frame-drift.md).
 
 ```bash
 python frame_drift.py take.mp4 --reference still.png --size 1920x1080 \

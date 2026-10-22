@@ -44,8 +44,10 @@
   `trailer_cut.py`. [trailer-cut.md](trailer-cut.md).
 - `trailer_rings.py` — renders a trailer beat's broadcast rings overlay as PNG frames; used by
   `trailer_cut.py`, and runs alone to preview a beat. [trailer-cut.md](trailer-cut.md#rings).
-- `frame_drift.py` — scores a take or still for drift (SSIM and the loop finder's score vs a reference still and frame to
-  frame, whole frame and named crops); agent-facing: one JSON document on stdout, exit 0 clean, 2 flagged, 1 error.
+- `frame_drift.py` — scores a take or still for drift (SSIM and the loop finder's score vs a
+  reference still and frame to frame, whole frame and named crops), finds changed regions, and
+  writes an evidence image per suspected area into a `review[]` queue for a judge; agent-facing:
+  one JSON document on stdout, exit 0 clean, 2 something to review, 1 error.
   [frame-drift.md](frame-drift.md).
 
 ## Context
